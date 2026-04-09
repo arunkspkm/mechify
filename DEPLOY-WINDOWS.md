@@ -26,7 +26,22 @@ cd mechify
 
 ---
 
-## Step 2: Configure Environment
+## Step 2: Create Data Directory
+
+Create a folder to store all Mechify data (database, uploads, backups):
+
+```cmd
+mkdir C:\mechify-data
+mkdir C:\mechify-data\postgres
+mkdir C:\mechify-data\uploads
+mkdir C:\mechify-data\backups
+```
+
+This folder contains all your business data. Back it up regularly.
+
+---
+
+## Step 3: Configure Environment
 
 Create a file called `.env` in the `C:\mechify` folder with this content:
 
@@ -34,7 +49,10 @@ Create a file called `.env` in the `C:\mechify` folder with this content:
 DB_PASSWORD=YourStrongPassword123
 NEXTAUTH_SECRET=YourRandomSecretKeyHere_MakeItLong
 NEXTAUTH_URL=http://localhost:3000
+DATA_PATH=C:/mechify-data
 ```
+
+> **Note:** Use forward slashes `/` in `DATA_PATH` even on Windows — Docker requires this format.
 
 **Important:** Change `DB_PASSWORD` and `NEXTAUTH_SECRET` to your own secure values.
 
@@ -45,13 +63,13 @@ To generate a random secret, open PowerShell and run:
 
 ---
 
-## Step 3: Build & Start
+## Step 4: Build & Start
 
 Open **Command Prompt** or **PowerShell** in the `C:\mechify` folder:
 
 ```cmd
 cd C:\mechify
-docker compose up -d --build
+docker compose -f docker-compose.prod.yml up -d --build
 ```
 
 This will:
@@ -62,25 +80,25 @@ This will:
 
 Check if running:
 ```cmd
-docker compose ps
+docker compose -f docker-compose.prod.yml ps
 ```
 
 You should see two containers: `mechify-db-1` (healthy) and `mechify-app-1` (running).
 
 ---
 
-## Step 4: Run Database Migrations
+## Step 5: Run Database Migrations
 
 ```cmd
-docker compose exec app npx prisma migrate deploy
+docker compose -f docker-compose.prod.yml exec app npx prisma migrate deploy
 ```
 
 ---
 
-## Step 5: Seed Default Data
+## Step 6: Seed Default Data
 
 ```cmd
-docker compose exec app npx prisma db seed
+docker compose -f docker-compose.prod.yml exec app npx prisma db seed
 ```
 
 This creates:
@@ -89,7 +107,7 @@ This creates:
 
 ---
 
-## Step 6: Access the App
+## Step 7: Access the App
 
 Open your browser and go to:
 
@@ -102,9 +120,11 @@ Login with:
 - Password: `admin123`
 
 **First things to do after login:**
-1. Go to **Settings** → Set your shop name, address, phone
+1. Go to **Settings** → Set your shop name, address, phone, GST number
 2. Go to **Users** → Change the admin password
 3. Go to **Users** → Create a counter operator account
+4. Go to **Master Data** → Review/add categories, brands, units
+5. Go to **Products** → Import existing inventory from Excel
 
 ---
 
@@ -126,6 +146,21 @@ http://192.168.1.100:3000
 
 ---
 
+## Data Storage
+
+All data is stored in `C:\mechify-data` (or the path you set in `DATA_PATH`):
+
+```
+C:\mechify-data\
+  ├── postgres\    # PostgreSQL database files
+  ├── uploads\     # Product images
+  └── backups\     # SQL backup files (.sql.gz)
+```
+
+You can browse, copy, or move this folder directly from Windows Explorer.
+
+---
+
 ## Daily Operations
 
 ### Start Mechify (after PC restart)
@@ -137,18 +172,18 @@ Docker Desktop starts automatically with Windows. If not:
 If containers didn't start:
 ```cmd
 cd C:\mechify
-docker compose up -d
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 ### Stop Mechify
 ```cmd
 cd C:\mechify
-docker compose down
+docker compose -f docker-compose.prod.yml down
 ```
 
 ### View Logs
 ```cmd
-docker compose logs -f app
+docker compose -f docker-compose.prod.yml logs -f app
 ```
 
 Press `Ctrl+C` to stop viewing logs.
@@ -157,33 +192,66 @@ Press `Ctrl+C` to stop viewing logs.
 
 ## Backup & Restore
 
-### Manual Backup
+### Option 1: In-App Backup (Recommended — safe while running)
+
+Run the backup script inside the container:
 ```cmd
-docker compose exec app sh scripts/backup.sh
+docker compose -f docker-compose.prod.yml exec app sh scripts/backup.sh
 ```
 
-Backups are stored in a Docker volume. To copy to your desktop:
+Backups are saved to `C:\mechify-data\backups\`. Each backup is a compressed SQL file like `mechify_backup_20260407_220000.sql.gz`.
+
+### Option 2: Copy Data Folder (Full backup — stop first)
+
+For a complete backup including images:
 ```cmd
-docker compose exec app ls /app/backups
-docker compose cp app:/app/backups/mechify_backup_YYYYMMDD_HHMMSS.sql.gz C:\Users\YourName\Desktop\
+:: Stop containers first to avoid database corruption
+docker compose -f docker-compose.prod.yml down
+
+:: Copy entire data folder
+xcopy C:\mechify-data D:\backup\mechify-data /E /I /H
+
+:: Start again
+docker compose -f docker-compose.prod.yml up -d
+```
+
+### Option 3: Copy Just the Backups Folder
+
+If you only need the database backup (not images):
+```cmd
+xcopy C:\mechify-data\backups D:\backup\mechify-backups /E /I
 ```
 
 ### Automated Daily Backup
-Add a Windows Task Scheduler task:
+
+Set up Windows Task Scheduler:
 1. Open **Task Scheduler** (search in Start menu)
 2. Click **Create Basic Task**
 3. Name: `Mechify Daily Backup`
 4. Trigger: Daily, at 10:00 PM
 5. Action: Start a program
 6. Program: `docker`
-7. Arguments: `compose -f C:\mechify\docker-compose.yml exec -T app sh scripts/backup.sh`
+7. Arguments: `compose -f C:\mechify\docker-compose.prod.yml exec -T app sh scripts/backup.sh`
 8. Start in: `C:\mechify`
 
 ### Restore from Backup
-```cmd
-docker compose cp C:\path\to\mechify_backup_YYYYMMDD_HHMMSS.sql.gz app:/app/backups/
 
-docker compose exec app sh -c "gunzip -c /app/backups/mechify_backup_YYYYMMDD_HHMMSS.sql.gz | psql postgresql://mechify:YourStrongPassword123@db:5432/mechify"
+**Restore SQL backup (in-app backup file):**
+```cmd
+docker compose -f docker-compose.prod.yml exec app sh -c "gunzip -c /app/backups/mechify_backup_YYYYMMDD_HHMMSS.sql.gz | psql postgresql://mechify:YourStrongPassword123@db:5432/mechify"
+```
+
+**Restore full data folder:**
+```cmd
+:: Stop containers
+docker compose -f docker-compose.prod.yml down
+
+:: Replace data folder
+rmdir /S /Q C:\mechify-data
+xcopy D:\backup\mechify-data C:\mechify-data /E /I /H
+
+:: Start containers
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 ---
@@ -195,9 +263,13 @@ When you get new code updates:
 ```cmd
 cd C:\mechify
 git pull                          # if using git
-docker compose down
-docker compose up -d --build      # rebuild with new code
-docker compose exec app npx prisma migrate deploy   # apply new migrations
+
+:: Rebuild and restart (data is preserved — it's in C:\mechify-data)
+docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml up -d --build
+
+:: Apply new database migrations
+docker compose -f docker-compose.prod.yml exec app npx prisma migrate deploy
 ```
 
 ---
@@ -212,7 +284,7 @@ docker compose exec app npx prisma migrate deploy   # apply new migrations
 ```cmd
 netstat -ano | findstr :3000
 taskkill /PID <PID_NUMBER> /F
-docker compose up -d
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 ### "Cannot connect from other computers"
@@ -225,28 +297,63 @@ docker compose up -d
 
 ### "Database connection failed"
 ```cmd
-docker compose logs db
+docker compose -f docker-compose.prod.yml logs db
 ```
 Check if PostgreSQL started correctly. Try restarting:
 ```cmd
-docker compose restart db
-docker compose restart app
+docker compose -f docker-compose.prod.yml restart db
+docker compose -f docker-compose.prod.yml restart app
 ```
+
+### "Permission denied on data folder"
+If Docker can't write to `C:\mechify-data`:
+1. Right-click the folder → Properties → Security
+2. Add `Everyone` with Full Control (or your Windows user)
 
 ### "Slow performance"
 - In Docker Desktop → Settings → Resources, allocate:
   - Memory: 4 GB minimum
   - CPUs: 2 minimum
 - Ensure WSL 2 backend is enabled (faster than Hyper-V)
+- Use SSD for `C:\mechify-data` location
 
 ### Reset Everything (DANGER: deletes all data)
 ```cmd
 cd C:\mechify
-docker compose down -v
-docker compose up -d --build
-docker compose exec app npx prisma migrate deploy
-docker compose exec app npx prisma db seed
+docker compose -f docker-compose.prod.yml down
+rmdir /S /Q C:\mechify-data
+mkdir C:\mechify-data\postgres
+mkdir C:\mechify-data\uploads
+mkdir C:\mechify-data\backups
+docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml exec app npx prisma migrate deploy
+docker compose -f docker-compose.prod.yml exec app npx prisma db seed
 ```
+
+---
+
+## Moving to a New Computer
+
+1. Stop Mechify on old computer:
+   ```cmd
+   docker compose -f docker-compose.prod.yml down
+   ```
+
+2. Copy two things to the new computer:
+   - `C:\mechify` (application code)
+   - `C:\mechify-data` (all your data)
+
+3. Install Docker Desktop on new computer
+
+4. Copy `.env` file to `C:\mechify\.env`
+
+5. Start on new computer:
+   ```cmd
+   cd C:\mechify
+   docker compose -f docker-compose.prod.yml up -d --build
+   ```
+
+All your data, invoices, products, and settings will be intact.
 
 ---
 
