@@ -1,0 +1,977 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ==================== AUTH ====================
+
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  name         String
+  role         UserRole
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  shifts                     Shift[]
+  invoices                   Invoice[]
+  estimates                  Estimate[]
+  stockAdjustmentsCreated    StockAdjustment[] @relation("AdjustedBy")
+  stockAdjustmentsApproved   StockAdjustment[] @relation("ApprovedBy")
+  writeOffsCreated           StockWriteOff[]   @relation("SubmittedBy")
+  writeOffsApproved          StockWriteOff[]   @relation("WriteOffApprovedBy")
+  customerPaymentsReceived   CustomerPayment[] @relation("ReceivedBy")
+  enquiries                  CustomerEnquiry[]
+  priceChanges               ProductPriceChange[]
+  purchaseOrdersCreated      PurchaseOrder[]
+  returnsProcessed           CustomerReturn[] @relation("ReturnProcessedBy")
+  notifications              Notification[]   @relation("NotificationRecipient")
+}
+
+model Notification {
+  id          String   @id @default(cuid())
+  recipientId String?  // null = broadcast to all, specific user ID = targeted
+  recipient   User?    @relation("NotificationRecipient", fields: [recipientId], references: [id])
+  type        String   // RETURN_CREATED, RETURN_APPROVED, WRITEOFF_SUBMITTED, PRICE_CHANGED, SHIFT_VARIANCE, LOW_STOCK, ENQUIRY_NEW
+  title       String
+  message     String
+  link        String?  // URL to navigate to
+  read        Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([recipientId, read])
+  @@index([createdAt])
+}
+
+enum UserRole {
+  OWNER
+  MANAGER
+  COUNTER_OPERATOR
+}
+
+// ==================== MASTER DATA ====================
+
+model MasterData {
+  id           String         @id @default(cuid())
+  type         MasterDataType
+  name         String
+  code         String?
+  parentId     String?
+  parent       MasterData?    @relation("MasterDataHierarchy", fields: [parentId], references: [id])
+  children     MasterData[]   @relation("MasterDataHierarchy")
+  metadata     Json?
+  displayOrder Int            @default(0)
+  active       Boolean        @default(true)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  // Product relations
+  productsByCategory     Product[]          @relation("ProductCategory")
+  productsByBrand        Product[]          @relation("ProductBrand")
+  productsByUnit         Product[]          @relation("ProductUnit")
+  productsByTaxRate      Product[]          @relation("ProductTaxRate")
+
+  // Batch relations
+  batchesByQualityGrade  Batch[]            @relation("BatchQualityGrade")
+
+  // Invoice/payment relations
+  invoicePayments        InvoicePayment[]   @relation("InvoicePaymentMethod")
+  customerPayments       CustomerPayment[]  @relation("CustomerPaymentMethod")
+
+  // Customer relations
+  customersByLoyaltyTier Customer[]         @relation("CustomerLoyaltyTier")
+
+  // Vehicle relations
+  vehiclesByMake         CustomerVehicle[]  @relation("VehicleMake")
+  vehiclesByModel        CustomerVehicle[]  @relation("VehicleModel")
+
+  // Stock adjustment/write-off relations
+  stockAdjustmentReasons StockAdjustment[]  @relation("AdjustmentReason")
+  writeOffReasons        StockWriteOff[]    @relation("WriteOffReason")
+
+  // Expense relations
+  expensesByCategory     Expense[]          @relation("ExpenseCategory")
+  expensesByPayment      Expense[]          @relation("ExpensePaymentMethod")
+  supplierPayments       SupplierPayment[]  @relation("SupplierPaymentMethod")
+  returnItemReasons      CustomerReturnItem[] @relation("ReturnItemReason")
+
+  @@unique([type, name])
+  @@index([type, active])
+}
+
+enum MasterDataType {
+  UNIT
+  CATEGORY
+  BRAND
+  EXPENSE_CATEGORY
+  PAYMENT_METHOD
+  RETURN_REASON
+  QUALITY_GRADE
+  LOYALTY_TIER
+  TAX_RATE
+  INSTALLATION_CHARGE_TYPE
+  VEHICLE_MAKE
+  VEHICLE_MODEL
+  STOCK_ADJUSTMENT_REASON
+  ESTIMATE_VALIDITY_PERIOD
+}
+
+// ==================== BUSINESS CONFIG ====================
+
+model BusinessConfig {
+  id                      String  @id @default("default")
+  shopName                String  @default("Mechify")
+  shopAddress             String?
+  shopPhone               String?
+  gstEnabled              Boolean @default(false)
+  gstNumber               String?
+  loyaltyEnabled          Boolean @default(false)
+  loyaltyPointsPerRupee   Decimal @default(0)
+  loyaltyRedemptionValue  Decimal @default(0)
+  pointExpiryMonths       Int     @default(12)
+  defaultDiscountMax      Decimal @default(10)
+  defaultCreditLimit      Decimal @default(0)
+  financialYearStartMonth Int     @default(4)
+  invoicePrefix           String  @default("MEC")
+  estimatePrefix          String  @default("EST")
+  expiryAlertDays         Int     @default(30)
+  backupTime              String  @default("22:00")
+  backupRetentionDays     Int     @default(30)
+  updatedAt               DateTime @updatedAt
+}
+
+// ==================== PRODUCT & CATALOG ====================
+
+model Product {
+  id                 String   @id @default(cuid())
+  sku                String   @unique
+  barcode            String?  @unique
+  name               String
+  description        String?
+  hsnCode            String?
+  categoryId         String
+  category           MasterData @relation("ProductCategory", fields: [categoryId], references: [id])
+  brandId            String?
+  brand              MasterData? @relation("ProductBrand", fields: [brandId], references: [id])
+  unitId             String
+  unit               MasterData @relation("ProductUnit", fields: [unitId], references: [id])
+  bundleSize         Decimal  @default(1)
+  mrp                Decimal
+  sellingPrice       Decimal
+  taxRateId          String?
+  taxRate            MasterData? @relation("ProductTaxRate", fields: [taxRateId], references: [id])
+  installationCharge Decimal  @default(0)
+  maxDiscountPercent Decimal?
+  lowStockThreshold  Int      @default(1)
+  hasExpiry          Boolean  @default(false)
+  active             Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  images             ProductImage[]
+  batches            Batch[]
+  companionProducts  ProductCompanion[] @relation("PrimaryProduct")
+  companionOf        ProductCompanion[] @relation("CompanionProduct")
+  invoiceItems       InvoiceItem[]
+  estimateItems         EstimateItem[]
+  purchaseInvoiceItems  PurchaseInvoiceItem[]
+  priceChanges          ProductPriceChange[]
+  purchaseOrderItems    PurchaseOrderItem[]
+  customerReturnItems   CustomerReturnItem[]
+  supplierReturnItems   SupplierReturnItem[]
+
+  @@index([name])
+  @@index([sku])
+  @@index([categoryId])
+}
+
+model ProductPriceChange {
+  id              String   @id @default(cuid())
+  productId       String
+  product         Product  @relation(fields: [productId], references: [id])
+  changedById     String
+  changedBy       User     @relation(fields: [changedById], references: [id])
+  changeType      String   @default("PRICE") // PRICE, TAX_RATE, BOTH
+  oldMrp          Decimal  @default(0)
+  newMrp          Decimal  @default(0)
+  oldSellingPrice Decimal  @default(0)
+  newSellingPrice Decimal  @default(0)
+  oldTaxRateId    String?
+  oldTaxRateName  String?
+  newTaxRateId    String?
+  newTaxRateName  String?
+  reason          String?
+  createdAt       DateTime @default(now())
+
+  @@index([productId])
+}
+
+model ProductImage {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  url       String
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model ProductCompanion {
+  id                 String  @id @default(cuid())
+  primaryProductId   String
+  primaryProduct     Product @relation("PrimaryProduct", fields: [primaryProductId], references: [id])
+  companionProductId String
+  companionProduct   Product @relation("CompanionProduct", fields: [companionProductId], references: [id])
+
+  @@unique([primaryProductId, companionProductId])
+}
+
+// ==================== SUPPLIER ====================
+
+model Supplier {
+  id               String   @id @default(cuid())
+  name             String
+  contactPerson    String?
+  phone            String?
+  email            String?
+  address          String?
+  gstNumber        String?
+  qualityRating    Int?     @default(3)
+  paymentTerms     String?
+  creditPeriodDays Int?
+  outstandingBalance Decimal @default(0)
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  batches            Batch[]
+  purchaseOrders     PurchaseOrder[]
+  purchaseInvoices   PurchaseInvoice[]
+  supplierReturns    SupplierReturn[]
+}
+
+// ==================== PURCHASE INVOICE ====================
+
+model PurchaseInvoice {
+  id                    String                @id @default(cuid())
+  invoiceNumber         String?
+  supplierBillNumber    String?
+  supplierId            String
+  supplier              Supplier              @relation(fields: [supplierId], references: [id])
+  totalItemsAmount    Decimal               @default(0)
+  handlingCharge      Decimal               @default(0)
+  grandTotal          Decimal               @default(0)
+  amountPaid          Decimal               @default(0)
+  outstandingAmount   Decimal               @default(0)
+  status              PurchaseInvoiceStatus @default(DRAFT)
+  notes               String?
+  invoiceDate         DateTime              @default(now())
+  dueDate             DateTime?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  items               PurchaseInvoiceItem[]
+  payments            SupplierPayment[]
+
+  @@index([supplierId])
+  @@index([status])
+}
+
+enum PurchaseInvoiceStatus {
+  DRAFT
+  FINALIZED
+  PARTIALLY_PAID
+  PAID
+  CANCELLED
+}
+
+model PurchaseInvoiceItem {
+  id                  String          @id @default(cuid())
+  purchaseInvoiceId   String
+  purchaseInvoice     PurchaseInvoice @relation(fields: [purchaseInvoiceId], references: [id])
+  productId           String
+  product             Product         @relation(fields: [productId], references: [id])
+  batchId             String?
+  batch               Batch?          @relation(fields: [batchId], references: [id])
+  bundleQty           Decimal
+  unitCost            Decimal
+  totalCost           Decimal
+  qualityGradeId      String?
+  expiryDate          DateTime?
+  createdAt           DateTime        @default(now())
+}
+
+model SupplierPayment {
+  id                  String          @id @default(cuid())
+  purchaseInvoiceId   String?
+  purchaseInvoice     PurchaseInvoice? @relation(fields: [purchaseInvoiceId], references: [id])
+  supplierId          String
+  amount              Decimal
+  paymentMethodId     String
+  paymentMethod       MasterData      @relation("SupplierPaymentMethod", fields: [paymentMethodId], references: [id])
+  reference           String?
+  notes               String?
+  isAdvance           Boolean         @default(false)
+  adjustedAmount      Decimal         @default(0)  // how much of this advance has been applied to invoices
+  date                DateTime        @default(now())
+  createdAt           DateTime        @default(now())
+
+  @@index([supplierId])
+}
+
+model PurchaseOrder {
+  id            String   @id @default(cuid())
+  poNumber      String   @unique
+  supplierId    String
+  supplier      Supplier @relation(fields: [supplierId], references: [id])
+  status        POStatus @default(DRAFT)
+  totalAmount   Decimal  @default(0)
+  notes         String?
+  expectedDate  DateTime?
+  createdById   String
+  createdBy     User     @relation(fields: [createdById], references: [id])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  items         PurchaseOrderItem[]
+  batches       Batch[]
+
+  @@index([supplierId])
+  @@index([status])
+}
+
+enum POStatus {
+  DRAFT
+  SENT
+  PARTIALLY_RECEIVED
+  CLOSED
+  CANCELLED
+}
+
+model PurchaseOrderItem {
+  id              String        @id @default(cuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  productId       String
+  product         Product       @relation(fields: [productId], references: [id])
+  orderedQty      Decimal
+  receivedQty     Decimal       @default(0)
+  agreedPrice     Decimal
+  notes           String?
+}
+
+// ==================== INVENTORY & BATCHES ====================
+
+model Batch {
+  id                String       @id @default(cuid())
+  productId         String
+  product           Product      @relation(fields: [productId], references: [id])
+  supplierId        String?
+  supplier          Supplier?    @relation(fields: [supplierId], references: [id])
+  purchaseOrderId   String?
+  purchaseOrder     PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  batchNumber       String?
+  purchaseDate      DateTime     @default(now())
+  qtyReceived       Decimal
+  qtyRemaining      Decimal
+  bundleQtyReceived Decimal?
+  unitCost          Decimal
+  handlingCharge    Decimal      @default(0)
+  landedCostPerUnit Decimal
+  qualityGradeId    String?
+  qualityGrade      MasterData?  @relation("BatchQualityGrade", fields: [qualityGradeId], references: [id])
+  expiryDate        DateTime?
+  active            Boolean      @default(true)
+  createdAt         DateTime     @default(now())
+
+  invoiceItems      InvoiceItem[]
+  writeOffs              StockWriteOff[]
+  adjustments            StockAdjustment[]
+  purchaseInvoiceItems   PurchaseInvoiceItem[]
+  customerReturnItems    CustomerReturnItem[]
+  supplierReturnItems    SupplierReturnItem[]
+
+  @@index([productId, expiryDate])
+  @@index([productId, purchaseDate])
+}
+
+model StockAdjustment {
+  id           String           @id @default(cuid())
+  date         DateTime         @default(now())
+  productId    String
+  batchId      String?
+  batch        Batch?           @relation(fields: [batchId], references: [id])
+  systemQty    Decimal
+  physicalQty  Decimal
+  variance     Decimal
+  reasonId     String
+  reason       MasterData       @relation("AdjustmentReason", fields: [reasonId], references: [id])
+  notes        String?
+  adjustedById String
+  adjustedBy   User             @relation("AdjustedBy", fields: [adjustedById], references: [id])
+  approvedById String?
+  approvedBy   User?            @relation("ApprovedBy", fields: [approvedById], references: [id])
+  status       ApprovalStatus   @default(PENDING)
+  createdAt    DateTime         @default(now())
+}
+
+model StockWriteOff {
+  id            String         @id @default(cuid())
+  date          DateTime       @default(now())
+  productId     String
+  batchId       String
+  batch         Batch          @relation(fields: [batchId], references: [id])
+  qty           Decimal
+  valueLost     Decimal
+  reasonId      String
+  reason        MasterData     @relation("WriteOffReason", fields: [reasonId], references: [id])
+  notes         String?
+  submittedById String
+  submittedBy   User           @relation("SubmittedBy", fields: [submittedById], references: [id])
+  approvedById  String?
+  approvedBy    User?          @relation("WriteOffApprovedBy", fields: [approvedById], references: [id])
+  status        ApprovalStatus @default(PENDING)
+  createdAt     DateTime       @default(now())
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// ==================== CUSTOMER ====================
+
+model Customer {
+  id                 String   @id @default(cuid())
+  name               String
+  phone              String?  @unique
+  email              String?
+  loyaltyPoints      Int      @default(0)
+  loyaltyTierId      String?
+  loyaltyTier        MasterData? @relation("CustomerLoyaltyTier", fields: [loyaltyTierId], references: [id])
+  creditLimit        Decimal  @default(0)
+  outstandingBalance Decimal  @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  vehicles              CustomerVehicle[]
+  invoices              Invoice[]
+  estimates             Estimate[]
+  payments              CustomerPayment[]
+  enquiries             CustomerEnquiry[]
+  returns               CustomerReturn[]
+  loyaltyTransactions   LoyaltyTransaction[]
+}
+
+model LoyaltyTransaction {
+  id          String           @id @default(cuid())
+  customerId  String
+  customer    Customer         @relation(fields: [customerId], references: [id])
+  type        LoyaltyTxnType
+  points      Int              // positive for earned, negative for redeemed
+  balance     Int              // running balance after this txn
+  invoiceId   String?
+  description String?
+  createdAt   DateTime         @default(now())
+
+  @@index([customerId])
+  @@index([invoiceId])
+}
+
+enum LoyaltyTxnType {
+  EARNED      // from purchase
+  REDEEMED    // used at POS
+  EXPIRED     // periodic expiry
+  ADJUSTMENT  // manual adjustment by owner
+}
+
+model CustomerVehicle {
+  id                 String     @id @default(cuid())
+  customerId         String
+  customer           Customer   @relation(fields: [customerId], references: [id])
+  vehicleMakeId      String
+  vehicleMake        MasterData @relation("VehicleMake", fields: [vehicleMakeId], references: [id])
+  vehicleModelId     String
+  vehicleModel       MasterData @relation("VehicleModel", fields: [vehicleModelId], references: [id])
+  year               Int?
+  registrationNumber String?
+  createdAt          DateTime   @default(now())
+
+  invoices           Invoice[]
+  estimates          Estimate[]
+}
+
+// ==================== BILLING / INVOICE ====================
+
+model Invoice {
+  id                String        @id @default(cuid())
+  invoiceNumber     String        @unique
+  financialYear     String
+  sequenceNumber    Int
+  operatorId        String
+  operator          User          @relation(fields: [operatorId], references: [id])
+  customerId        String?
+  customer          Customer?     @relation(fields: [customerId], references: [id])
+  vehicleId         String?
+  vehicle           CustomerVehicle? @relation(fields: [vehicleId], references: [id])
+  estimateId        String?       @unique
+  estimate          Estimate?     @relation(fields: [estimateId], references: [id])
+  shiftId           String?
+  shift             Shift?        @relation(fields: [shiftId], references: [id])
+
+  subtotal          Decimal
+  taxTotal          Decimal       @default(0)
+  discountTotal     Decimal       @default(0)
+  grandTotal        Decimal
+  gstEnabled        Boolean       @default(false)
+
+  isCreditSale      Boolean       @default(false)
+  amountPaid        Decimal       @default(0)
+  outstandingAmount Decimal       @default(0)
+
+  notes             String?
+  status            InvoiceStatus @default(COMPLETED)
+  date              DateTime      @default(now())
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  items             InvoiceItem[]
+  payments          InvoicePayment[]
+  customerPayments  CustomerPayment[]
+  returns           CustomerReturn[]
+
+  @@index([financialYear, sequenceNumber])
+  @@index([date])
+  @@index([customerId])
+}
+
+enum InvoiceStatus {
+  COMPLETED
+  RETURNED
+  PARTIALLY_RETURNED
+  CANCELLED
+}
+
+model InvoiceItem {
+  id                 String   @id @default(cuid())
+  invoiceId          String
+  invoice            Invoice  @relation(fields: [invoiceId], references: [id])
+  productId          String?
+  product            Product? @relation(fields: [productId], references: [id])
+  batchId            String?
+  batch              Batch?   @relation(fields: [batchId], references: [id])
+  isCustomItem       Boolean  @default(false)
+  customItemName     String?
+  qty                Decimal
+  unitPrice          Decimal
+  landedCostPerUnit  Decimal  @default(0)
+  discountAmount     Decimal  @default(0)
+  installationCharge Decimal  @default(0)
+  taxableAmount      Decimal
+  cgstRate           Decimal  @default(0)
+  cgstAmount         Decimal  @default(0)
+  sgstRate           Decimal  @default(0)
+  sgstAmount         Decimal  @default(0)
+  igstRate           Decimal  @default(0)
+  igstAmount         Decimal  @default(0)
+  lineTotal          Decimal
+  hsnCode            String?
+}
+
+model InvoicePayment {
+  id              String     @id @default(cuid())
+  invoiceId       String
+  invoice         Invoice    @relation(fields: [invoiceId], references: [id])
+  paymentMethodId String
+  paymentMethod   MasterData @relation("InvoicePaymentMethod", fields: [paymentMethodId], references: [id])
+  amount          Decimal
+  reference       String?
+  createdAt       DateTime   @default(now())
+}
+
+model CustomerPayment {
+  id              String     @id @default(cuid())
+  customerId      String
+  customer        Customer   @relation(fields: [customerId], references: [id])
+  invoiceId       String?
+  invoice         Invoice?   @relation(fields: [invoiceId], references: [id])
+  amount          Decimal
+  paymentMethodId String
+  paymentMethod   MasterData @relation("CustomerPaymentMethod", fields: [paymentMethodId], references: [id])
+  receivedById    String
+  receivedBy      User       @relation("ReceivedBy", fields: [receivedById], references: [id])
+  reference       String?
+  notes           String?
+  date            DateTime   @default(now())
+}
+
+// ==================== ESTIMATES ====================
+
+model Estimate {
+  id             String         @id @default(cuid())
+  estimateNumber String         @unique
+  financialYear  String
+  sequenceNumber Int
+  operatorId     String
+  operator       User           @relation(fields: [operatorId], references: [id])
+  customerId     String?
+  customer       Customer?      @relation(fields: [customerId], references: [id])
+  vehicleId      String?
+  vehicle        CustomerVehicle? @relation(fields: [vehicleId], references: [id])
+  customerName   String?
+  customerPhone  String?
+
+  subtotal       Decimal
+  taxTotal       Decimal        @default(0)
+  discountTotal  Decimal        @default(0)
+  grandTotal     Decimal
+  gstEnabled     Boolean        @default(false)
+  validUntil     DateTime
+  status         EstimateStatus @default(DRAFT)
+
+  notes          String?
+  date           DateTime       @default(now())
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  items          EstimateItem[]
+  invoice        Invoice?
+
+  @@index([financialYear, sequenceNumber])
+}
+
+enum EstimateStatus {
+  DRAFT
+  SENT
+  CONVERTED
+  EXPIRED
+  CANCELLED
+}
+
+model EstimateItem {
+  id                 String   @id @default(cuid())
+  estimateId         String
+  estimate           Estimate @relation(fields: [estimateId], references: [id])
+  productId          String?
+  product            Product? @relation(fields: [productId], references: [id])
+  isCustomItem       Boolean  @default(false)
+  customItemName     String?
+  qty                Decimal
+  unitPrice          Decimal
+  discountAmount     Decimal  @default(0)
+  installationCharge Decimal  @default(0)
+  taxableAmount      Decimal
+  cgstRate           Decimal  @default(0)
+  cgstAmount         Decimal  @default(0)
+  sgstRate           Decimal  @default(0)
+  sgstAmount         Decimal  @default(0)
+  lineTotal          Decimal
+  hsnCode            String?
+}
+
+// ==================== SHIFTS ====================
+
+model Shift {
+  id              String      @id @default(cuid())
+  operatorId      String
+  operator        User        @relation(fields: [operatorId], references: [id])
+  date            DateTime    @default(now()) @db.Date
+  openingBalance  Decimal
+  closingBalance  Decimal?
+  expectedCash    Decimal?
+  actualCash      Decimal?
+  variance        Decimal?
+  varianceReason  String?
+  status          ShiftStatus @default(OPEN)
+  startTime       DateTime    @default(now())
+  endTime         DateTime?
+
+  invoices        Invoice[]
+
+  @@index([operatorId, date])
+}
+
+enum ShiftStatus {
+  OPEN
+  CLOSED
+}
+
+// ==================== EXPENSES (Phase 2+, stub for schema completeness) ====================
+
+// ==================== CUSTOMER ENQUIRY ====================
+
+model CustomerEnquiry {
+  id               String        @id @default(cuid())
+  customerName     String
+  customerPhone    String?
+  customerId       String?
+  customer         Customer?     @relation(fields: [customerId], references: [id])
+  productDescription String
+  desiredQty       Int           @default(1)
+  estimatedBudget  Decimal?
+  advanceAmount    Decimal       @default(0)
+  advanceMethodId  String?
+  advanceReference String?
+  notes            String?
+  status           EnquiryStatus @default(ENQUIRY_RECORDED)
+  operatorId       String
+  operator         User          @relation(fields: [operatorId], references: [id])
+  purchaseOrderId  String?
+  invoiceId        String?
+  notifiedAt       DateTime?
+  deliveredAt      DateTime?
+  cancelledReason  String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@index([status])
+  @@index([customerPhone])
+}
+
+enum EnquiryStatus {
+  ENQUIRY_RECORDED
+  ORDER_PLACED
+  IN_TRANSIT
+  RECEIVED
+  CUSTOMER_NOTIFIED
+  DELIVERED
+  CANCELLED
+}
+
+// ==================== CUSTOMER RETURNS ====================
+
+model CustomerReturn {
+  id              String              @id @default(cuid())
+  invoiceId       String
+  invoice         Invoice             @relation(fields: [invoiceId], references: [id])
+  customerId      String?
+  customer        Customer?           @relation(fields: [customerId], references: [id])
+  returnNumber    String              @unique
+  totalRefund     Decimal             @default(0)
+  status          CustomerReturnStatus @default(PENDING)
+  processedById   String?
+  processedBy     User?               @relation("ReturnProcessedBy", fields: [processedById], references: [id])
+  notes           String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  items           CustomerReturnItem[]
+
+  @@index([invoiceId])
+}
+
+enum CustomerReturnStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model CustomerReturnItem {
+  id              String         @id @default(cuid())
+  returnId        String
+  return_         CustomerReturn @relation(fields: [returnId], references: [id])
+  productId       String?
+  product         Product?       @relation(fields: [productId], references: [id])
+  batchId         String?
+  batch           Batch?         @relation(fields: [batchId], references: [id])
+  qty             Decimal
+  unitPrice       Decimal
+  refundAmount    Decimal
+  reasonId        String
+  reason          MasterData     @relation("ReturnItemReason", fields: [reasonId], references: [id])
+  resolution      ReturnResolution @default(REFUND)
+  restockable     Boolean        @default(false)
+  isCustomItem    Boolean        @default(false)
+  customItemName  String?
+
+  // Warranty tracking
+  warrantyStatus       WarrantyStatus?
+  warrantySentAt       DateTime?
+  warrantyResolvedAt   DateTime?
+  warrantyNotes        String?
+  replacementBatchId   String?       // batch given to customer as immediate replacement
+  replacementGiven     Boolean       @default(false) // true = replacement already handed to customer
+}
+
+enum WarrantyStatus {
+  SENT_FOR_WARRANTY
+  REPLACEMENT_RECEIVED  // supplier sent replacement/credit back
+  REPAIRED              // supplier repaired and returned
+  REJECTED_BY_SUPPLIER
+}
+
+enum ReturnResolution {
+  REFUND
+  REPLACE
+  CREDIT
+  WARRANTY
+}
+
+// ==================== SUPPLIER RETURNS ====================
+
+model SupplierReturn {
+  id              String               @id @default(cuid())
+  supplierId      String
+  supplier        Supplier             @relation(fields: [supplierId], references: [id])
+  returnNumber    String               @unique
+  totalAmount     Decimal              @default(0)
+  creditReceived  Decimal              @default(0)
+  status          SupplierReturnStatus @default(INITIATED)
+  notes           String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  items           SupplierReturnItem[]
+
+  @@index([supplierId])
+}
+
+enum SupplierReturnStatus {
+  INITIATED
+  SHIPPED
+  CREDIT_RECEIVED
+  CANCELLED
+}
+
+model SupplierReturnItem {
+  id              String         @id @default(cuid())
+  returnId        String
+  return_         SupplierReturn @relation(fields: [returnId], references: [id])
+  productId       String
+  product         Product        @relation(fields: [productId], references: [id])
+  batchId         String
+  batch           Batch          @relation(fields: [batchId], references: [id])
+  qty             Decimal
+  unitCost        Decimal
+  totalCost       Decimal
+  reason          String
+}
+
+// ==================== EMPLOYEES ====================
+
+model Employee {
+  id              String         @id @default(cuid())
+  name            String
+  phone           String?        @unique
+  role            String         // e.g., "Mechanic", "Helper", "Sales", "Driver"
+  wageType        WageType       @default(DAILY)
+  dailyWage       Decimal        @default(0)
+  monthlySalary   Decimal        @default(0)  // for future monthly payroll
+  onCallRate      Decimal        @default(0)  // per-day rate for on-call work
+  joiningDate     DateTime       @default(now()) @db.Date
+  exitDate        DateTime?      @db.Date
+  idProofType     String?        // Aadhaar, PAN, etc.
+  idProofNumber   String?
+  address         String?
+  emergencyContact String?
+  bankAccountNumber String?
+  bankIfsc        String?
+  active          Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  attendance      Attendance[]
+  salaryRecords   SalaryRecord[]
+  advancePayments AdvancePayment[]
+}
+
+enum WageType {
+  DAILY
+  MONTHLY
+}
+
+model Attendance {
+  id         String         @id @default(cuid())
+  employeeId String
+  employee   Employee       @relation(fields: [employeeId], references: [id])
+  date       DateTime       @db.Date
+  status     AttendanceStatus @default(PRESENT)
+  notes      String?
+  createdAt  DateTime       @default(now())
+
+  @@unique([employeeId, date])
+  @@index([date])
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  HALF_DAY
+  ON_CALL
+  LEAVE
+  HOLIDAY
+}
+
+model SalaryRecord {
+  id              String       @id @default(cuid())
+  employeeId      String
+  employee        Employee     @relation(fields: [employeeId], references: [id])
+  periodType      PeriodType   @default(WEEKLY)
+  periodStart     DateTime     @db.Date
+  periodEnd       DateTime     @db.Date
+  dailyWage       Decimal      @default(0)  // snapshot of rate at time of settlement
+  presentDays     Int          @default(0)
+  halfDays        Int          @default(0)
+  onCallDays      Int          @default(0)
+  onCallAmount    Decimal      @default(0)
+  baseSalary      Decimal      @default(0)  // presentDays × dailyWage + halfDays × 0.5 × dailyWage
+  totalAdvances   Decimal      @default(0)  // deducted
+  bonus           Decimal      @default(0)
+  deductions      Decimal      @default(0)  // other deductions
+  netPayable      Decimal      @default(0)
+  paidAmount      Decimal      @default(0)
+  status          SalaryStatus @default(PENDING)
+  paidDate        DateTime?
+  notes           String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@unique([employeeId, periodStart, periodEnd])
+  @@index([periodStart])
+}
+
+enum PeriodType {
+  WEEKLY
+  MONTHLY
+}
+
+enum SalaryStatus {
+  PENDING
+  PAID
+  PARTIALLY_PAID
+}
+
+model AdvancePayment {
+  id              String     @id @default(cuid())
+  employeeId      String
+  employee        Employee   @relation(fields: [employeeId], references: [id])
+  amount          Decimal
+  reason          String?
+  date            DateTime   @default(now()) @db.Date
+  deductedInMonth Int?       // month when deducted from salary
+  deductedInYear  Int?       // year when deducted from salary
+  createdAt       DateTime   @default(now())
+
+  @@index([employeeId])
+}
+
+// ==================== EXPENSES ====================
+
+model Expense {
+  id              String     @id @default(cuid())
+  date            DateTime   @default(now())
+  categoryId      String
+  category        MasterData @relation("ExpenseCategory", fields: [categoryId], references: [id])
+  description     String
+  amount          Decimal
+  paymentMethodId String
+  paymentMethod   MasterData @relation("ExpensePaymentMethod", fields: [paymentMethodId], references: [id])
+  reference       String?
+  notes           String?
+  createdAt       DateTime   @default(now())
+}

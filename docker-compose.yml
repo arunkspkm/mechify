@@ -1,0 +1,38 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: mechify
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-mechify_secret}
+      POSTGRES_DB: mechify
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mechify"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://mechify:${DB_PASSWORD:-mechify_secret}@db:5432/mechify
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-change_this_in_production}
+      NEXTAUTH_URL: http://localhost:3000
+    volumes:
+      - uploads:/app/public/uploads
+      - backups:/app/backups
+    ports:
+      - "3000:3000"
+
+volumes:
+  pgdata:
+  uploads:
+  backups:
