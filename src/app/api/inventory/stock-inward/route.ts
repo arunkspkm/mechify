@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { z } from "zod";
 import { distributeLandedCost } from "@/lib/landed-cost";
 import { formatValidationError } from "@/lib/validation";
+import { createNotification } from "@/lib/notify";
 
 const lineItemSchema = z.object({
   productId: z.string().min(1),
@@ -63,7 +64,15 @@ export async function POST(req: NextRequest) {
     const productIds = items.map((i) => i.productId);
     const products = await prisma.product.findMany({
       where: { id: { in: productIds } },
-      select: { id: true, name: true, sku: true, bundleSize: true, hasExpiry: true },
+      select: {
+        id: true, name: true, sku: true, bundleSize: true, hasExpiry: true, sellingPrice: true,
+        batches: {
+          where: { active: true },
+          orderBy: { purchaseDate: "desc" },
+          take: 1,
+          select: { landedCostPerUnit: true },
+        },
+      },
     });
     const productMap = new Map(products.map((p) => [p.id, p]));
 
@@ -150,6 +159,29 @@ export async function POST(req: NextRequest) {
         landedCostPerUnit: lc.landedCostPerUnit.toFixed(2),
       });
     }
+
+    // Notify owner if cost increased vs previous batch
+    try {
+      for (let i = 0; i < lineItems.length; i++) {
+        const li = lineItems[i];
+        if (!li.product) continue;
+        const prevBatch = li.product.batches[0];
+        if (!prevBatch) continue;
+        const prevCost = Number(prevBatch.landedCostPerUnit);
+        const newCost = landedCosts[i].landedCostPerUnit;
+        if (newCost > prevCost && prevCost > 0) {
+          const sp = Number(li.product.sellingPrice);
+          const marginPct = sp > 0 ? Math.round(((sp - newCost) / sp) * 100) : 0;
+          await createNotification({
+            type: "COST_INCREASE",
+            title: "Cost Increased",
+            message: `${li.product.name} — cost Rs.${prevCost.toFixed(0)} → Rs.${newCost.toFixed(0)}. Selling Rs.${sp.toFixed(0)}, margin ${marginPct}%`,
+            link: `/products/${li.productId}`,
+            recipientRole: "OWNER",
+          });
+        }
+      }
+    } catch {}
 
     return NextResponse.json({
       data: {

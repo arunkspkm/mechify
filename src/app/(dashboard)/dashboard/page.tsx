@@ -37,6 +37,15 @@ interface DashboardData {
     customer: { name: string } | null;
   }[];
   salesChart: { date: string; label: string; total: number }[];
+  supplierDueList?: {
+    id: string;
+    invoiceNumber: string;
+    supplierName: string;
+    outstanding: number;
+    dueDate: string;
+    daysLeft: number;
+    isOverdue: boolean;
+  }[];
   businessHealth?: {
     revenueGrowth: number;
     lastMonthRevenue: number;
@@ -312,6 +321,56 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Supplier Payments Due */}
+      {data.supplierDueList && data.supplierDueList.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Wallet className="h-4 w-4 text-amber-500" /> Supplier Payments Due
+              <Badge variant="destructive" className="ml-auto">{data.supplierDueList.length}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Supplier</TableHead>
+                  <TableHead>Invoice</TableHead>
+                  <TableHead className="text-right">Outstanding</TableHead>
+                  <TableHead className="text-right">Due</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.supplierDueList.map((item) => (
+                  <TableRow key={item.id}>
+                    <TableCell className="text-sm font-medium">{item.supplierName}</TableCell>
+                    <TableCell>
+                      <Link href={`/purchase-invoices/${item.id}`} className="text-blue-600 hover:underline text-sm">
+                        {item.invoiceNumber}
+                      </Link>
+                    </TableCell>
+                    <TableCell className="text-right font-medium">Rs.{item.outstanding.toFixed(0)}</TableCell>
+                    <TableCell className="text-right">
+                      {item.isOverdue ? (
+                        <Badge variant="destructive" className="text-xs">
+                          {Math.abs(item.daysLeft)}d overdue
+                        </Badge>
+                      ) : item.daysLeft === 0 ? (
+                        <Badge variant="destructive" className="text-xs">Today</Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-xs text-amber-600 border-amber-300">
+                          {item.daysLeft}d left
+                        </Badge>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Business Health */}
       {data.businessHealth && (() => {

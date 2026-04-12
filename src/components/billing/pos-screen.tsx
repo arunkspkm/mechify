@@ -79,6 +79,7 @@ interface CustomerData {
   id: string;
   name: string;
   phone: string | null;
+  creditLimit: string | number;
   outstandingBalance: string | number;
   loyaltyPoints: number;
   vehicles: VehicleData[];
@@ -1127,6 +1128,25 @@ export function POSScreen() {
                   Outstanding: Rs.{Number(selectedCustomer.outstandingBalance).toFixed(0)}
                 </Badge>
               )}
+              {Number(selectedCustomer.creditLimit) > 0 && (() => {
+                const limit = Number(selectedCustomer.creditLimit);
+                const used = Number(selectedCustomer.outstandingBalance);
+                const remaining = limit - used;
+                const utilPct = Math.round((used / limit) * 100);
+                return (
+                  <div className="mt-1 flex flex-wrap items-center gap-1">
+                    <Badge variant={remaining <= 0 ? "destructive" : utilPct >= 80 ? "outline" : "secondary"} className="text-xs">
+                      Credit: Rs.{remaining.toFixed(0)} / {limit.toFixed(0)} left
+                    </Badge>
+                    {utilPct >= 80 && remaining > 0 && (
+                      <span className="text-[10px] text-amber-600 font-medium">{utilPct}% used</span>
+                    )}
+                    {remaining <= 0 && (
+                      <span className="text-[10px] text-red-600 font-medium">Limit exceeded</span>
+                    )}
+                  </div>
+                );
+              })()}
               {loyaltyEnabled && selectedCustomer.loyaltyPoints > 0 && (
                 <div className="mt-1 flex items-center gap-2">
                   <Badge variant="secondary" className="text-xs">

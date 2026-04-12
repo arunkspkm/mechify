@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
+import { createNotification } from "@/lib/notify";
 
 // GET /api/dashboard — KPI metrics
 export async function GET(req: NextRequest) {
@@ -330,6 +331,61 @@ export async function GET(req: NextRequest) {
       receivablesAging: aging,
     };
 
+    // ========== Supplier Payment Due Dates ==========
+    const threeDaysFromNow = new Date(now);
+    threeDaysFromNow.setDate(now.getDate() + 3);
+    threeDaysFromNow.setHours(23, 59, 59, 999);
+
+    const upcomingSupplierPayments = await prisma.purchaseInvoice.findMany({
+      where: {
+        status: { notIn: ["PAID", "CANCELLED"] },
+        outstandingAmount: { gt: 0 },
+        dueDate: { not: null, lte: threeDaysFromNow },
+      },
+      select: {
+        id: true,
+        invoiceNumber: true,
+        supplierBillNumber: true,
+        outstandingAmount: true,
+        dueDate: true,
+        supplier: { select: { name: true } },
+      },
+      orderBy: { dueDate: "asc" },
+    });
+
+    const supplierDueList = upcomingSupplierPayments.map((pi) => {
+      const daysLeft = Math.ceil((new Date(pi.dueDate!).getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+      return {
+        id: pi.id,
+        invoiceNumber: pi.invoiceNumber || pi.supplierBillNumber || "—",
+        supplierName: pi.supplier.name,
+        outstanding: Number(pi.outstandingAmount),
+        dueDate: pi.dueDate,
+        daysLeft,
+        isOverdue: daysLeft < 0,
+      };
+    });
+
+    // Fire notifications for overdue / due-today (once per day, keyed by date)
+    const todayKey = now.toISOString().slice(0, 10);
+    try {
+      for (const item of supplierDueList) {
+        if (item.daysLeft > 0) continue; // only overdue & due-today
+        const type = item.isOverdue ? "SUPPLIER_PAYMENT_OVERDUE" : "SUPPLIER_PAYMENT_DUE";
+        const existing = await prisma.notification.findFirst({
+          where: { type, link: `/purchase-invoices/${item.id}`, createdAt: { gte: todayStart } },
+        });
+        if (!existing) {
+          await createNotification({
+            type,
+            title: item.isOverdue ? "Supplier Payment Overdue" : "Supplier Payment Due Today",
+            message: `${item.supplierName} — Rs.${item.outstanding.toFixed(0)} (${item.invoiceNumber})`,
+            link: `/purchase-invoices/${item.id}`,
+          });
+        }
+      }
+    } catch {}
+
     return NextResponse.json({
       data: {
         todaySales: Number(todaySales._sum.grandTotal ?? 0) - todayRefundAmt,
@@ -352,6 +408,7 @@ export async function GET(req: NextRequest) {
         recentInvoices,
         salesChart,
         businessHealth,
+        supplierDueList,
       },
     });
   } catch (err) {

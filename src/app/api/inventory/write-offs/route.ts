@@ -109,7 +109,7 @@ export async function POST(req: NextRequest) {
       type: "WRITE_OFF_SUBMITTED",
       title: "Write-off Submitted",
       message: `Write-off for ${writeOff.batch.product.name} — ${qty} units (Rs.${valueLost.toFixed(2)})`,
-      link: `/inventory`,
+      link: `/inventory/write-offs`,
       recipientRole: "OWNER",
     });
   } catch {}

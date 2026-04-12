@@ -13,6 +13,19 @@ export async function GET(req: NextRequest) {
   const unreadOnly = searchParams.get("unread") === "true";
 
   try {
+    // Cleanup: delete read notifications > 7 days, all notifications > 30 days
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    await prisma.notification.deleteMany({
+      where: {
+        recipientId: session.user.id,
+        OR: [
+          { read: true, createdAt: { lt: sevenDaysAgo } },
+          { createdAt: { lt: thirtyDaysAgo } },
+        ],
+      },
+    });
+
     const where: Record<string, unknown> = {
       recipientId: session.user.id,
     };

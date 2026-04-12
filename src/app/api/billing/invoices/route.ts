@@ -8,6 +8,7 @@ import { calculateGST } from "@/lib/gst";
 import { validateMargin } from "@/lib/margin-guard";
 import { round2 } from "@/lib/round";
 import { formatValidationError } from "@/lib/validation";
+import { createNotification } from "@/lib/notify";
 
 const invoiceItemSchema = z.object({
   productId: z.string().optional().nullable(),
@@ -432,6 +433,28 @@ export async function POST(req: NextRequest) {
         where: { id: customerId },
         data: { outstandingBalance: { increment: outstandingAmount } },
       });
+
+      // Notify owner when customer crosses 80% credit utilization
+      try {
+        const cust = await prisma.customer.findUnique({
+          where: { id: customerId },
+          select: { name: true, creditLimit: true, outstandingBalance: true },
+        });
+        if (cust) {
+          const limit = Number(cust.creditLimit);
+          const balance = Number(cust.outstandingBalance);
+          if (limit > 0 && balance >= limit * 0.8) {
+            const pct = Math.round((balance / limit) * 100);
+            await createNotification({
+              type: "CREDIT_LIMIT_WARNING",
+              title: balance >= limit ? "Credit Limit Exceeded" : "Credit Limit Warning",
+              message: `${cust.name} is at ${pct}% credit utilization (Rs.${balance.toFixed(0)} / Rs.${limit.toFixed(0)})`,
+              link: `/customers/${customerId}`,
+              recipientRole: "OWNER",
+            });
+          }
+        }
+      } catch {}
     }
 
     // Step 6: Deduct redeemed loyalty points (use decrement to avoid race condition)
