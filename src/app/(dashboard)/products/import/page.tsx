@@ -42,6 +42,7 @@ export default function ImportProductsPage() {
   const [importing, setImporting] = useState(false);
   const [result, setResult] = useState<{
     imported: number;
+    updated: number;
     skipped: number;
     total: number;
     errors: { row: number; name: string; error: string }[];
@@ -299,10 +300,14 @@ export default function ImportProductsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-4 gap-4">
               <div className="p-4 bg-green-50 rounded-lg text-center">
                 <p className="text-2xl font-bold text-green-700">{result.imported}</p>
                 <p className="text-sm text-green-600">Imported</p>
+              </div>
+              <div className="p-4 bg-blue-50 rounded-lg text-center">
+                <p className="text-2xl font-bold text-blue-700">{result.updated}</p>
+                <p className="text-sm text-blue-600">Updated</p>
               </div>
               <div className="p-4 bg-amber-50 rounded-lg text-center">
                 <p className="text-2xl font-bold text-amber-700">{result.skipped}</p>

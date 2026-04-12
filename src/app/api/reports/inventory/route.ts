@@ -43,7 +43,7 @@ export async function GET(req: NextRequest) {
         id: p.id, name: p.name, sku: p.sku, category: p.category.name,
         sellingPrice: Number(p.sellingPrice),
         totalQty, totalValue, threshold: p.lowStockThreshold,
-        isLowStock: totalQty <= p.lowStockThreshold,
+        isLowStock: totalQty < p.lowStockThreshold,
         nearestExpiry: nearestExpiry?.expiryDate ?? null,
         isNearExpiry: nearestExpiry?.expiryDate ? new Date(nearestExpiry.expiryDate) <= alertDate : false,
         batchCount: p.batches.length,

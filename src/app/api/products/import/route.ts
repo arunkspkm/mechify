@@ -120,7 +120,7 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-      const mrp = toNum(p.mrp) || toNum(p.sellingPrice) || 0;
+      const mrp = toNum(p.mrp) || 0;
       const sellingPrice = toNum(p.sellingPrice) || mrp;
       const hsnCode = toStr(p.hsnCode);
       const bundleSize = toNum(p.bundleSize) || 1;

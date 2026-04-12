@@ -74,7 +74,7 @@ export async function GET(req: NextRequest) {
     const avgLandedCost =
       totalStock > 0 ? totalValue / totalStock : 0;
 
-    const isLowStock = totalStock <= product.lowStockThreshold;
+    const isLowStock = totalStock < product.lowStockThreshold;
 
     // Check for near-expiry batches
     const nearExpiryBatches = product.batches.filter(
@@ -136,7 +136,7 @@ export async function GET(req: NextRequest) {
     const value = p.batches.reduce((s, b) => s + Number(b.qtyRemaining) * Number(b.landedCostPerUnit), 0);
 
     // Apply same post-filters
-    const isLow = stock <= p.lowStockThreshold;
+    const isLow = stock < p.lowStockThreshold;
     const hasNearExp = p.batches.some((b) => b.expiryDate && new Date(b.expiryDate) <= alertDate);
     const hasExpired = p.batches.some((b) => b.expiryDate && new Date(b.expiryDate) <= new Date());
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
@@ -91,6 +91,7 @@ export function Sidebar() {
   const [notifications, setNotifications] = useState<NotificationData[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [bellOpen, setBellOpen] = useState(false);
+  const bellRef = useRef<HTMLDivElement>(null);
 
   // Poll for notifications every 30 seconds
   useEffect(() => {
@@ -110,6 +111,18 @@ export function Sidebar() {
     const interval = setInterval(fetchNotifications, 30000);
     return () => clearInterval(interval);
   }, [session?.user?.id]);
+
+  // Close panel on outside click
+  useEffect(() => {
+    if (!bellOpen) return;
+    function handleClick(e: MouseEvent) {
+      if (bellRef.current && !bellRef.current.contains(e.target as Node)) {
+        setBellOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [bellOpen]);
 
   async function markAllRead() {
     await fetch("/api/notifications", {
@@ -135,13 +148,13 @@ export function Sidebar() {
   const navItems = role === "OWNER" ? ownerNavItems : role === "MANAGER" ? managerNavItems : operatorNavItems;
 
   return (
-    <div className="flex h-full w-64 flex-col border-r bg-white">
+    <div className="flex h-full w-64 flex-col border-r bg-white overflow-visible">
       {/* Logo + Notifications */}
       <div className="flex h-16 items-center justify-between border-b px-6">
         <Link href="/" className="text-xl font-bold text-gray-900">
           Mechify
         </Link>
-        <div className="relative">
+        <div ref={bellRef} className="relative">
           <button type="button" onClick={() => setBellOpen(!bellOpen)} className="relative p-1 text-gray-500 hover:text-gray-900">
             <Bell className="h-5 w-5" />
             {unreadCount > 0 && (
@@ -151,9 +164,9 @@ export function Sidebar() {
             )}
           </button>
           {bellOpen && (
-            <div className="absolute right-0 top-8 w-72 bg-white border rounded-lg shadow-lg z-50 max-h-80 overflow-auto">
-              <div className="flex items-center justify-between px-3 py-2 border-b">
-                <span className="text-sm font-medium">Notifications</span>
+            <div className="absolute left-0 top-10 w-80 bg-white border rounded-lg shadow-xl z-[9999] max-h-96 overflow-auto">
+              <div className="flex items-center justify-between px-4 py-3 border-b">
+                <span className="text-sm font-semibold text-gray-900">Notifications</span>
                 {unreadCount > 0 && (
                   <button type="button" onClick={markAllRead} className="text-xs text-blue-600 hover:underline">
                     Mark all read
@@ -161,19 +174,19 @@ export function Sidebar() {
                 )}
               </div>
               {notifications.length === 0 ? (
-                <p className="text-sm text-gray-400 text-center py-6">No notifications</p>
+                <p className="text-sm text-gray-500 text-center py-8">No notifications</p>
               ) : (
                 notifications.slice(0, 15).map((n) => (
                   <div key={n.id}
-                    className={`px-3 py-2 border-b last:border-b-0 cursor-pointer hover:bg-gray-50 ${!n.read ? "bg-blue-50" : ""}`}
+                    className={`px-4 py-3 border-b last:border-b-0 cursor-pointer hover:bg-gray-50 ${!n.read ? "bg-blue-50" : ""}`}
                     onClick={() => {
                       markRead(n.id);
                       setBellOpen(false);
                       if (n.link) window.location.href = n.link;
                     }}>
-                    <p className={`text-sm ${!n.read ? "font-medium" : "text-gray-600"}`}>{n.title}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">{n.message}</p>
-                    <p className="text-[10px] text-gray-300 mt-0.5">
+                    <p className={`text-sm leading-snug ${!n.read ? "font-semibold text-gray-900" : "font-medium text-gray-700"}`}>{n.title}</p>
+                    <p className="text-xs text-gray-500 mt-1 leading-snug">{n.message}</p>
+                    <p className="text-xs text-gray-400 mt-1">
                       {new Date(n.createdAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
                     </p>
                   </div>
