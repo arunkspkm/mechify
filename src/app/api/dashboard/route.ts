@@ -162,7 +162,7 @@ export async function GET(req: NextRequest) {
         const totalQty = p.batches.reduce((s, b) => s + Number(b.qtyRemaining), 0);
         return { id: p.id, name: p.name, sku: p.sku, stock: totalQty, threshold: p.lowStockThreshold };
       })
-      .filter((p) => p.stock <= p.threshold)
+      .filter((p) => p.stock < p.threshold)
       .sort((a, b) => a.stock - b.stock)
       .slice(0, 10);
 
@@ -260,7 +260,7 @@ export async function GET(req: NextRequest) {
     const sixtyDaysAgo = new Date(now);
     sixtyDaysAgo.setDate(now.getDate() - 60);
     const allActiveProducts = await prisma.product.findMany({
-      where: { active: true },
+      where: { active: true, createdAt: { lt: sixtyDaysAgo } },
       select: { id: true, name: true, sellingPrice: true, batches: { where: { active: true }, select: { qtyRemaining: true } } },
     });
     const recentlySoldProductIds = await prisma.invoiceItem.findMany({

@@ -5,6 +5,7 @@ import type { NextAuthConfig } from "next-auth";
  * Used by middleware for session checking.
  */
 export const authConfig: NextAuthConfig = {
+  trustHost: true,
   providers: [], // Providers added in auth.ts (Node.js only)
   callbacks: {
     async jwt({ token, user }) {

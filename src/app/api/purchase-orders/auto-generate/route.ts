@@ -93,7 +93,7 @@ export async function GET() {
         hasOpenPO: productsWithOpenPO.has(p.id),
       };
     })
-    .filter((p) => p.currentStock <= p.threshold && !p.hasOpenPO);
+    .filter((p) => p.currentStock < p.threshold && !p.hasOpenPO);
 
   // Group by supplier
   const supplierGroups: Record<string, {

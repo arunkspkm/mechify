@@ -8,6 +8,8 @@ interface ImportProduct {
 
 /**
  * POST /api/products/import — Bulk import products from mapped Excel data.
+ * Matches existing products by name (case-insensitive) and updates them;
+ * creates new products for rows with no name match.
  */
 export async function POST(req: NextRequest) {
   const session = await auth();
@@ -41,6 +43,7 @@ export async function POST(req: NextRequest) {
   const defaultUnitId = units.find((u) => u.code === "pcs")?.id ?? units[0]?.id;
 
   let imported = 0;
+  let updated = 0;
   let skipped = 0;
   const errors: { row: number; name: string; error: string }[] = [];
 
@@ -65,61 +68,6 @@ export async function POST(req: NextRequest) {
       continue;
     }
 
-    // Generate SKU if not provided
-    let sku = toStr(p.sku);
-    if (!sku) {
-      // Create SKU: first 3 chars of each word, max 16 chars
-      const brandStr = toStr(p.brand);
-      const skuParts = [name, brandStr].filter(Boolean).join(" ");
-      const words = skuParts.replace(/[^a-zA-Z0-9\s.]/g, "").split(/\s+/).filter((w) => w.length > 0).map((w) => w.toUpperCase().slice(0, 3));
-      let baseSku = words.join("-");
-      if (baseSku.length > 16) {
-        const segments: string[] = [];
-        let len = 0;
-        for (const word of words) {
-          const needed = segments.length > 0 ? word.length + 1 : word.length;
-          if (len + needed > 16) break;
-          segments.push(word);
-          len += needed;
-        }
-        baseSku = segments.join("-");
-      }
-      sku = baseSku || name.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 16);
-
-      // Ensure uniqueness by adding suffix if needed
-      let suffix = 0;
-      let candidateSku = sku;
-      while (usedSkus.has(candidateSku)) {
-        suffix++;
-        candidateSku = `${sku}-${suffix}`;
-      }
-      sku = candidateSku;
-    }
-
-    // Check if SKU already exists in database
-    const existing = await prisma.product.findUnique({ where: { sku } });
-    if (existing || usedSkus.has(sku)) {
-      // Try appending a number
-      let attempt = 1;
-      let newSku = `${sku}-${attempt}`;
-      while (
-        usedSkus.has(newSku) ||
-        (await prisma.product.findUnique({ where: { sku: newSku } }))
-      ) {
-        attempt++;
-        newSku = `${sku}-${attempt}`;
-        if (attempt > 10) break;
-      }
-      if (attempt > 10) {
-        errors.push({ row: i + 1, name, error: `Could not generate unique SKU from "${sku}"` });
-        skipped++;
-        continue;
-      }
-      sku = newSku;
-    }
-
-    usedSkus.add(sku);
-
     // Resolve category
     const categoryStr = toStr(p.category);
     let categoryId = defaultCategoryId;
@@ -127,15 +75,10 @@ export async function POST(req: NextRequest) {
       const catLower = categoryStr.toLowerCase().trim();
       categoryId = categoryMap.get(catLower) ?? defaultCategoryId;
 
-      // If category doesn't exist, create it
       if (!categoryId) {
         try {
           const newCat = await prisma.masterData.create({
-            data: {
-              type: "CATEGORY",
-              name: categoryStr.trim(),
-              displayOrder: categories.length,
-            },
+            data: { type: "CATEGORY", name: categoryStr.trim(), displayOrder: categories.length },
           });
           categoryId = newCat.id;
           categoryMap.set(catLower, newCat.id);
@@ -152,7 +95,6 @@ export async function POST(req: NextRequest) {
       const unitLower = unitStr.toLowerCase().trim();
       unitId = unitMap.get(unitLower) ?? unitCodeMap.get(unitLower) ?? defaultUnitId;
 
-      // If unit doesn't exist, create it
       if (!unitId) {
         try {
           const newUnit = await prisma.masterData.create({
@@ -201,6 +143,132 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      // Stock / cost calculations (needed for both create and update paths)
+      const hasStock = p.stock !== undefined && p.stock !== null && p.stock !== "";
+      const stockBundles = hasStock ? toNum(p.stock) : toNum(p.quantity);
+      const costPerBundle = toNum(p.unitPrice) || toNum(p.costPerBundle) || 0;
+      const stockUnits = stockBundles * bundleSize;
+      const costPerUnit = bundleSize > 1 && costPerBundle > 0 ? costPerBundle / bundleSize : costPerBundle;
+
+      // Resolve supplier/distributor (needed for both paths)
+      let supplierId: string | null = null;
+      const distributorName = toStr(p.distributor);
+      if (distributorName) {
+        const distLower = distributorName.toLowerCase().trim();
+        if (!supplierCache.has(distLower)) {
+          const existingSupplier = await prisma.supplier.findFirst({
+            where: { name: { equals: distributorName.trim(), mode: "insensitive" } },
+          });
+          if (existingSupplier) {
+            supplierCache.set(distLower, existingSupplier.id);
+          } else {
+            const newSupplier = await prisma.supplier.create({
+              data: { name: distributorName.trim() },
+            });
+            supplierCache.set(distLower, newSupplier.id);
+          }
+        }
+        supplierId = supplierCache.get(distLower) ?? null;
+      }
+
+      // --- Check for existing product by name (case-insensitive) ---
+      const existingProduct = await prisma.product.findFirst({
+        where: { name: { equals: name.trim(), mode: "insensitive" } },
+      });
+
+      if (existingProduct) {
+        // UPDATE existing product fields
+        await prisma.product.update({
+          where: { id: existingProduct.id },
+          data: { mrp, sellingPrice, hsnCode: hsnCode || null, categoryId, brandId, unitId, bundleSize },
+        });
+
+        // Update IMPORT batch stock if one exists, otherwise create a fresh one
+        const importBatch = await prisma.batch.findFirst({
+          where: { productId: existingProduct.id, batchNumber: "IMPORT", active: true },
+        });
+        if (importBatch) {
+          await prisma.batch.update({
+            where: { id: importBatch.id },
+            data: {
+              supplierId,
+              qtyReceived: stockUnits,
+              qtyRemaining: stockUnits,
+              unitCost: costPerUnit,
+              landedCostPerUnit: costPerUnit > 0 ? costPerUnit : sellingPrice,
+              purchaseDate: new Date(),
+            },
+          });
+        } else {
+          await prisma.batch.create({
+            data: {
+              productId: existingProduct.id,
+              supplierId,
+              batchNumber: "IMPORT",
+              bundleQtyReceived: bundleSize > 1 ? stockBundles : undefined,
+              qtyReceived: stockUnits,
+              qtyRemaining: stockUnits,
+              unitCost: costPerUnit,
+              landedCostPerUnit: costPerUnit > 0 ? costPerUnit : sellingPrice,
+              purchaseDate: new Date(),
+            },
+          });
+        }
+
+        updated++;
+        continue;
+      }
+
+      // --- CREATE new product ---
+
+      // Generate SKU if not provided
+      let sku = toStr(p.sku);
+      if (!sku) {
+        const skuParts = [name, toStr(p.brand)].filter(Boolean).join(" ");
+        const words = skuParts.replace(/[^a-zA-Z0-9\s.]/g, "").split(/\s+/).filter((w) => w.length > 0).map((w) => w.toUpperCase().slice(0, 3));
+        let baseSku = words.join("-");
+        if (baseSku.length > 16) {
+          const segments: string[] = [];
+          let len = 0;
+          for (const word of words) {
+            const needed = segments.length > 0 ? word.length + 1 : word.length;
+            if (len + needed > 16) break;
+            segments.push(word);
+            len += needed;
+          }
+          baseSku = segments.join("-");
+        }
+        sku = baseSku || name.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 16);
+
+        let suffix = 0;
+        let candidateSku = sku;
+        while (usedSkus.has(candidateSku)) {
+          suffix++;
+          candidateSku = `${sku}-${suffix}`;
+        }
+        sku = candidateSku;
+      }
+
+      // Ensure SKU is unique in DB
+      const skuExists = await prisma.product.findUnique({ where: { sku } });
+      if (skuExists || usedSkus.has(sku)) {
+        let attempt = 1;
+        let newSku = `${sku}-${attempt}`;
+        while (usedSkus.has(newSku) || (await prisma.product.findUnique({ where: { sku: newSku } }))) {
+          attempt++;
+          newSku = `${sku}-${attempt}`;
+          if (attempt > 10) break;
+        }
+        if (attempt > 10) {
+          errors.push({ row: i + 1, name, error: `Could not generate unique SKU from "${sku}"` });
+          skipped++;
+          continue;
+        }
+        sku = newSku;
+      }
+
+      usedSkus.add(sku);
+
       const product = await prisma.product.create({
         data: {
           name: name.trim(),
@@ -217,35 +285,6 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      // Resolve supplier/distributor
-      let supplierId: string | null = null;
-      const distributorName = toStr(p.distributor);
-      if (distributorName) {
-        const distLower = distributorName.toLowerCase().trim();
-        // Check supplier cache first
-        if (!supplierCache.has(distLower)) {
-          const existing = await prisma.supplier.findFirst({
-            where: { name: { equals: distributorName.trim(), mode: "insensitive" } },
-          });
-          if (existing) {
-            supplierCache.set(distLower, existing.id);
-          } else {
-            const newSupplier = await prisma.supplier.create({
-              data: { name: distributorName.trim() },
-            });
-            supplierCache.set(distLower, newSupplier.id);
-          }
-        }
-        supplierId = supplierCache.get(distLower) ?? null;
-      }
-
-      // Create initial batch — always create one even with 0 stock so supplier link is preserved
-      const stockBundles = toNum(p.stock) || toNum(p.quantity) || 0;
-      const costPerBundle = toNum(p.unitPrice) || toNum(p.costPerBundle) || 0;
-      // Stock in selling units = bundles × bundleSize
-      const stockUnits = stockBundles * bundleSize;
-      // Cost per selling unit
-      const costPerUnit = bundleSize > 1 && costPerBundle > 0 ? costPerBundle / bundleSize : costPerBundle;
       await prisma.batch.create({
         data: {
           productId: product.id,
@@ -269,7 +308,7 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({
-    data: { imported, skipped, total: products.length, errors },
+    data: { imported, updated, skipped, total: products.length, errors },
   });
 }
 
