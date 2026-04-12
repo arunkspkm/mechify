@@ -72,8 +72,10 @@ export default function InventoryPage() {
   const router = useRouter();
   const [items, setItems] = useState<StockItem[]>([]);
   const [categories, setCategories] = useState<MasterDataOption[]>([]);
+  const [suppliers, setSuppliers] = useState<MasterDataOption[]>([]);
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [supplierFilter, setSupplierFilter] = useState("all");
   const [lowStockOnly, setLowStockOnly] = useState(false);
   const [nearExpiryOnly, setNearExpiryOnly] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -100,6 +102,7 @@ export default function InventoryPage() {
     const params = new URLSearchParams();
     if (search) params.set("search", search);
     if (categoryFilter && categoryFilter !== "all") params.set("category", categoryFilter);
+    if (supplierFilter && supplierFilter !== "all") params.set("supplier", supplierFilter);
     if (lowStockOnly) params.set("lowStock", "true");
     if (nearExpiryOnly) params.set("nearExpiry", "true");
 
@@ -108,7 +111,7 @@ export default function InventoryPage() {
     setItems(json.data ?? []);
     if (json.summary) setSummary(json.summary);
     setLoading(false);
-  }, [search, categoryFilter, lowStockOnly, nearExpiryOnly]);
+  }, [search, categoryFilter, supplierFilter, lowStockOnly, nearExpiryOnly]);
 
   useEffect(() => {
     fetchInventory();
@@ -118,6 +121,9 @@ export default function InventoryPage() {
     fetch("/api/master-data?type=CATEGORY")
       .then((r) => r.json())
       .then((j) => setCategories(j.data ?? []));
+    fetch("/api/suppliers")
+      .then((r) => r.json())
+      .then((j) => setSuppliers((j.data ?? []).map((s: { id: string; name: string }) => ({ id: s.id, name: s.name }))));
   }, []);
 
   async function openBatchEditor(productId: string, productName: string) {
@@ -278,6 +284,13 @@ export default function InventoryPage() {
           onValueChange={(v) => setCategoryFilter(v ?? "")}
           options={[{ id: "all", name: "All categories" }, ...categories]}
           placeholder="All categories"
+          className="w-48"
+        />
+        <AsyncSelect
+          value={supplierFilter}
+          onValueChange={(v) => setSupplierFilter(v ?? "")}
+          options={[{ id: "all", name: "All suppliers" }, ...suppliers]}
+          placeholder="All suppliers"
           className="w-48"
         />
         <label className="flex items-center gap-2 text-sm">

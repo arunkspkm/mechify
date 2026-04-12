@@ -15,6 +15,7 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const search = searchParams.get("search");
   const categoryId = searchParams.get("category");
+  const supplierId = searchParams.get("supplier");
   const lowStockOnly = searchParams.get("lowStock") === "true";
   const nearExpiryOnly = searchParams.get("nearExpiry") === "true";
   const page = parseInt(searchParams.get("page") ?? "1", 10);
@@ -28,6 +29,9 @@ export async function GET(req: NextRequest) {
 
   const where: Record<string, unknown> = { active: true };
   if (categoryId) where.categoryId = categoryId;
+  if (supplierId) {
+    where.batches = { some: { supplierId, active: true, qtyRemaining: { gt: 0 } } };
+  }
   if (search) {
     where.OR = [
       { name: { contains: search, mode: "insensitive" } },

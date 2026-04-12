@@ -50,6 +50,7 @@ interface LineItem {
   unitCost: string;
   qualityGradeId: string;
   expiryDate: string;
+  sellingPrice: number;
 }
 
 interface MasterDataOption {
@@ -172,6 +173,7 @@ export function StockInwardForm() {
         unitCost: bundleCost > 0 ? String(bundleCost) : "",
         qualityGradeId: product.lastBatch?.qualityGradeId ?? "",
         expiryDate: "",
+        sellingPrice: Number(product.sellingPrice ?? 0),
       },
     ]);
 
@@ -458,6 +460,8 @@ export function StockInwardForm() {
                     <TableHead className="w-32">Expiry</TableHead>
                     <TableHead className="w-28 text-right">Units</TableHead>
                     <TableHead className="w-32 text-right">Landed/Unit</TableHead>
+                    <TableHead className="w-28 text-right">Selling</TableHead>
+                    <TableHead className="w-24 text-right">Margin</TableHead>
                     <TableHead className="w-12"></TableHead>
                   </TableRow>
                 </TableHeader>
@@ -529,6 +533,22 @@ export function StockInwardForm() {
                       </TableCell>
                       <TableCell className="text-right text-sm font-medium text-blue-700">
                         Rs.{getLandedCostPerUnit(item).toFixed(2)}
+                      </TableCell>
+                      <TableCell className="text-right text-sm">
+                        {item.sellingPrice > 0 ? `Rs.${item.sellingPrice.toFixed(0)}` : "—"}
+                      </TableCell>
+                      <TableCell className="text-right text-sm">
+                        {(() => {
+                          const landed = getLandedCostPerUnit(item);
+                          const sp = item.sellingPrice;
+                          if (sp <= 0 || landed <= 0) return "—";
+                          const margin = Math.round(((sp - landed) / sp) * 100);
+                          return (
+                            <span className={margin < 10 ? "text-red-600 font-semibold" : margin < 20 ? "text-amber-600 font-medium" : "text-green-600 font-medium"}>
+                              {margin}%
+                            </span>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell>
                         <div className="flex gap-0.5">
