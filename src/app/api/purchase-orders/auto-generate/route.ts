@@ -86,7 +86,7 @@ export async function GET() {
         sku: p.sku,
         currentStock: totalStock,
         threshold: p.lowStockThreshold,
-        suggestedQty: Math.max(p.lowStockThreshold * 2 - totalStock, p.lowStockThreshold),
+        suggestedQty: Math.max(p.lowStockThreshold - totalStock, 1),
         lastCost,
         lastSupplierId: supplierId,
         lastSupplierName: supplierName,

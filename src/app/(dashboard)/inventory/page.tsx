@@ -121,7 +121,7 @@ export default function InventoryPage() {
     fetch("/api/master-data?type=CATEGORY")
       .then((r) => r.json())
       .then((j) => setCategories(j.data ?? []));
-    fetch("/api/suppliers")
+    fetch("/api/suppliers?limit=200")
       .then((r) => r.json())
       .then((j) => setSuppliers((j.data ?? []).map((s: { id: string; name: string }) => ({ id: s.id, name: s.name }))));
   }, []);
