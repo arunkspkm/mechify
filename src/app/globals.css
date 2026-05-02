@@ -192,7 +192,7 @@
   }
 
   .a4-label-sku {
-    color: #888;
+    color: #333;
   }
 
   .a4-label-prices {
@@ -207,7 +207,7 @@
   }
 
   .a4-label-ourprice {
-    font-size: 5.5pt;
+    font-size: 6.5pt;
     color: #666;
   }
 
@@ -229,9 +229,15 @@
   }
 
   .a4-label-65 .a4-label-name {
-    font-size: 6pt;
+    font-size: 7pt;
     line-height: 1.15;
-    -webkit-line-clamp: 2;
+    -webkit-line-clamp: 1;
+  }
+
+  .a4-label-65 .a4-label-sku {
+    font-size: 6.5pt;
+    line-height: 1;
+    color: #333;
   }
 
   .a4-label-65 .a4-label-prices {
@@ -239,11 +245,11 @@
   }
 
   .a4-label-65 .a4-label-mrp {
-    font-size: 5.5pt;
+    font-size: 6.5pt;
   }
 
   .a4-label-65 .a4-label-price {
-    font-size: 9pt;
+    font-size: 10pt;
   }
 
   /* 40 labels: 4×10 (48mm × 25mm) — medium */
@@ -259,17 +265,17 @@
   }
 
   .a4-label-40 .a4-label-shop {
-    font-size: 5pt;
+    font-size: 6pt;
   }
 
   .a4-label-40 .a4-label-name {
-    font-size: 7pt;
+    font-size: 8pt;
     line-height: 1.2;
     -webkit-line-clamp: 2;
   }
 
   .a4-label-40 .a4-label-sku {
-    font-size: 5pt;
+    font-size: 7pt;
     margin-top: 0.5px;
   }
 
@@ -278,11 +284,11 @@
   }
 
   .a4-label-40 .a4-label-mrp {
-    font-size: 6pt;
+    font-size: 7pt;
   }
 
   .a4-label-40 .a4-label-price {
-    font-size: 10pt;
+    font-size: 11pt;
   }
 
   /* 24 labels: 3×8 (64mm × 34mm) — large */
@@ -298,17 +304,17 @@
   }
 
   .a4-label-24 .a4-label-shop {
-    font-size: 6pt;
+    font-size: 7pt;
   }
 
   .a4-label-24 .a4-label-name {
-    font-size: 8pt;
+    font-size: 9pt;
     line-height: 1.2;
     -webkit-line-clamp: 2;
   }
 
   .a4-label-24 .a4-label-sku {
-    font-size: 6pt;
+    font-size: 8pt;
     margin-top: 1px;
   }
 
@@ -317,11 +323,11 @@
   }
 
   .a4-label-24 .a4-label-mrp {
-    font-size: 7pt;
+    font-size: 8pt;
   }
 
   .a4-label-24 .a4-label-price {
-    font-size: 12pt;
+    font-size: 13pt;
   }
 
   /* Thermal labels */
@@ -345,14 +351,20 @@
     height: 25mm;
   }
 
+  .thermal-label-small .thermal-label-sku {
+    font-size: 7.5pt;
+    line-height: 1;
+    color: #333;
+  }
+
   .thermal-label-shop {
-    font-size: 5pt;
+    font-size: 6pt;
     color: #888;
     text-transform: uppercase;
   }
 
   .thermal-label-name {
-    font-size: 7pt;
+    font-size: 8pt;
     font-weight: 700;
     line-height: 1.2;
     overflow: hidden;
@@ -361,8 +373,8 @@
   }
 
   .thermal-label-sku {
-    font-size: 5pt;
-    color: #888;
+    font-size: 7pt;
+    color: #333;
   }
 
   .thermal-label-prices {
@@ -373,13 +385,30 @@
   }
 
   .thermal-label-mrp {
-    font-size: 6pt;
+    font-size: 7pt;
     color: #999;
     text-decoration: line-through;
   }
 
   .thermal-label-price {
-    font-size: 10pt;
+    font-size: 11pt;
     font-weight: 900;
+  }
+
+  .a4-label-asterisk,
+  .thermal-label-asterisk {
+    font-size: 0.7em;
+    vertical-align: super;
+    color: #c2410c;
+    margin-left: 0.5mm;
+    font-weight: 700;
+  }
+
+  /* Hide cut-guide borders when grid lines are turned off */
+  .no-label-grid .a4-label {
+    border: none !important;
+  }
+  .no-label-grid .thermal-label {
+    border-bottom: none !important;
   }
 }

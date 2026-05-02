@@ -42,10 +42,12 @@ export async function GET(
         advancePayments: {
           orderBy: { date: "desc" },
           take: 20,
+          include: { paymentMethod: { select: { id: true, name: true } } },
         },
         salaryRecords: {
           orderBy: { periodStart: "desc" },
           take: 20,
+          include: { paymentMethod: { select: { id: true, name: true } } },
         },
       },
     });

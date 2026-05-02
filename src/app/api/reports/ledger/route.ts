@@ -13,13 +13,21 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const type = searchParams.get("type") ?? "supplier";
   const format = searchParams.get("format") ?? "json";
+  const from = searchParams.get("from");
+  const to = searchParams.get("to");
+
+  // Build period filter (inclusive). If neither set, no period filter (lifetime).
+  const periodFilter: Record<string, Date> = {};
+  if (from) periodFilter.gte = new Date(from);
+  if (to) periodFilter.lte = new Date(to);
+  const hasPeriod = from != null || to != null;
 
   try {
     if (type === "supplier") {
       const suppliers = await prisma.supplier.findMany({
         where: { active: true },
         select: {
-          id: true, name: true, phone: true, gstNumber: true,
+          id: true, name: true, phone: true, gstNumber: true, openingBalance: true,
           _count: { select: { purchaseInvoices: true, supplierReturns: true } },
         },
         orderBy: { name: "asc" },
@@ -27,17 +35,30 @@ export async function GET(req: NextRequest) {
 
       // Get outstanding per supplier + overpayments + advances
       const ledger = await Promise.all(suppliers.map(async (s) => {
-        const agg = await prisma.purchaseInvoice.aggregate({
-          where: { supplierId: s.id, status: { not: "CANCELLED" } },
-          _sum: { grandTotal: true, amountPaid: true, outstandingAmount: true },
+        // Period-scoped invoice aggregation
+        const periodAgg = await prisma.purchaseInvoice.aggregate({
+          where: {
+            supplierId: s.id,
+            status: { not: "CANCELLED" },
+            ...(hasPeriod ? { invoiceDate: periodFilter } : {}),
+          },
+          _sum: { grandTotal: true, amountPaid: true },
+          _count: { _all: true },
         });
-        const totalPurchases = Number(agg._sum.grandTotal ?? 0);
-        const totalPaid = Number(agg._sum.amountPaid ?? 0);
-        const outstanding = Number(agg._sum.outstandingAmount ?? 0);
-        // Overpayment = paid more than invoice total (e.g., price corrected after payment)
-        const overpayment = Math.max(0, totalPaid - totalPurchases);
+        const totalPurchases = Number(periodAgg._sum.grandTotal ?? 0);
+        const totalPaid = Number(periodAgg._sum.amountPaid ?? 0);
+        const periodInvoiceCount = periodAgg._count._all;
 
-        // Pending advances
+        // Current-state outstanding (lifetime — a balance, not a flow)
+        const outstandingAgg = await prisma.purchaseInvoice.aggregate({
+          where: { supplierId: s.id, status: { not: "CANCELLED" } },
+          _sum: { outstandingAmount: true, grandTotal: true, amountPaid: true },
+        });
+        const invoiceOutstanding = Number(outstandingAgg._sum.outstandingAmount ?? 0);
+        const outstanding = invoiceOutstanding + Number(s.openingBalance);
+        const overpayment = Math.max(0, Number(outstandingAgg._sum.amountPaid ?? 0) - Number(outstandingAgg._sum.grandTotal ?? 0));
+
+        // Pending advances (current-state)
         const advances = await prisma.supplierPayment.findMany({
           where: { supplierId: s.id, isAdvance: true },
           select: { amount: true, adjustedAmount: true },
@@ -52,18 +73,23 @@ export async function GET(req: NextRequest) {
         return {
           id: s.id, name: s.name, phone: s.phone, gstNumber: s.gstNumber,
           totalPurchases, totalPaid, outstanding, overpayment, pendingAdvance, netBalance,
-          invoiceCount: s._count.purchaseInvoices,
+          invoiceCount: hasPeriod ? periodInvoiceCount : s._count.purchaseInvoices,
           returnCount: s._count.supplierReturns,
         };
       }));
 
-      const totalOutstanding = ledger.reduce((s, l) => s + l.outstanding, 0);
-      const totalPurchases = ledger.reduce((s, l) => s + l.totalPurchases, 0);
-      const totalOverpayment = ledger.reduce((s, l) => s + l.overpayment, 0);
-      const totalPendingAdvance = ledger.reduce((s, l) => s + l.pendingAdvance, 0);
+      // When period is set, drop suppliers with no activity in period AND no outstanding
+      const filteredLedger = hasPeriod
+        ? ledger.filter((l) => l.invoiceCount > 0 || l.outstanding > 0 || l.overpayment > 0 || l.pendingAdvance > 0)
+        : ledger;
+
+      const totalOutstanding = filteredLedger.reduce((s, l) => s + l.outstanding, 0);
+      const totalPurchases = filteredLedger.reduce((s, l) => s + l.totalPurchases, 0);
+      const totalOverpayment = filteredLedger.reduce((s, l) => s + l.overpayment, 0);
+      const totalPendingAdvance = filteredLedger.reduce((s, l) => s + l.pendingAdvance, 0);
 
       if (format === "excel") {
-        const rows = ledger.map((l) => ({
+        const rows = filteredLedger.map((l) => ({
           "Supplier": l.name,
           "Phone": l.phone ?? "",
           "GST": l.gstNumber ?? "",
@@ -86,39 +112,55 @@ export async function GET(req: NextRequest) {
       }
 
       return NextResponse.json({
-        data: { summary: { totalOutstanding, totalPurchases, totalOverpayment, totalPendingAdvance, supplierCount: ledger.length }, ledger },
+        data: { summary: { totalOutstanding, totalPurchases, totalOverpayment, totalPendingAdvance, supplierCount: filteredLedger.length }, ledger: filteredLedger },
       });
     }
 
     // Customer ledger
     const customers = await prisma.customer.findMany({
       select: {
-        id: true, name: true, phone: true, outstandingBalance: true,
+        id: true, name: true, phone: true, outstandingBalance: true, openingBalance: true,
         _count: { select: { invoices: true, returns: true } },
       },
       orderBy: { name: "asc" },
     });
 
     const customerLedger = await Promise.all(customers.map(async (c) => {
-      const agg = await prisma.invoice.aggregate({
+      // Period-scoped invoice aggregation
+      const periodAgg = await prisma.invoice.aggregate({
+        where: {
+          customerId: c.id,
+          status: { not: "CANCELLED" },
+          ...(hasPeriod ? { date: periodFilter } : {}),
+        },
+        _sum: { grandTotal: true, amountPaid: true },
+        _count: { _all: true },
+      });
+      // Current-state outstanding (lifetime)
+      const outstandingAgg = await prisma.invoice.aggregate({
         where: { customerId: c.id, status: { not: "CANCELLED" } },
-        _sum: { grandTotal: true, amountPaid: true, outstandingAmount: true },
+        _sum: { outstandingAmount: true },
       });
       return {
         id: c.id, name: c.name, phone: c.phone,
-        totalSales: Number(agg._sum.grandTotal ?? 0),
-        totalPaid: Number(agg._sum.amountPaid ?? 0),
-        outstanding: Number(agg._sum.outstandingAmount ?? 0),
-        invoiceCount: c._count.invoices,
+        totalSales: Number(periodAgg._sum.grandTotal ?? 0),
+        totalPaid: Number(periodAgg._sum.amountPaid ?? 0),
+        outstanding: Number(outstandingAgg._sum.outstandingAmount ?? 0) + Number(c.openingBalance),
+        invoiceCount: hasPeriod ? periodAgg._count._all : c._count.invoices,
         returnCount: c._count.returns,
       };
     }));
 
-    const totalReceivable = customerLedger.reduce((s, c) => s + c.outstanding, 0);
-    const totalCustomerSales = customerLedger.reduce((s, c) => s + c.totalSales, 0);
+    // When period is set, drop customers with no activity in period AND no outstanding
+    const filteredCustomerLedger = hasPeriod
+      ? customerLedger.filter((c) => c.invoiceCount > 0 || c.outstanding > 0)
+      : customerLedger;
+
+    const totalReceivable = filteredCustomerLedger.reduce((s, c) => s + c.outstanding, 0);
+    const totalCustomerSales = filteredCustomerLedger.reduce((s, c) => s + c.totalSales, 0);
 
     if (format === "excel") {
-      const rows = customerLedger.map((c) => ({
+      const rows = filteredCustomerLedger.map((c) => ({
         "Customer": c.name,
         "Phone": c.phone ?? "",
         "Total Sales": c.totalSales.toFixed(2),
@@ -137,7 +179,7 @@ export async function GET(req: NextRequest) {
     }
 
     return NextResponse.json({
-      data: { summary: { totalReceivable, totalCustomerSales, customerCount: customerLedger.length }, ledger: customerLedger },
+      data: { summary: { totalReceivable, totalCustomerSales, customerCount: filteredCustomerLedger.length }, ledger: filteredCustomerLedger },
     });
   } catch (err) {
     console.error("Ledger report error:", err);

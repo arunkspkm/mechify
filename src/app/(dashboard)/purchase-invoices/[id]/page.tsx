@@ -15,9 +15,10 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { AsyncSelect } from "@/components/shared/async-select";
+import { QuickAddProduct } from "@/components/shared/quick-add-product";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Plus, CreditCard, Check, Tag } from "lucide-react";
+import { ArrowLeft, Plus, CreditCard, Check, Tag, Pencil, Trash2 } from "lucide-react";
 
 interface PIDetail {
   id: string;
@@ -70,6 +71,11 @@ export default function PurchaseInvoiceDetailPage({
   const [newItemProductName, setNewItemProductName] = useState("");
   const [newItemQty, setNewItemQty] = useState("1");
   const [newItemCost, setNewItemCost] = useState("");
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+
+  // Handling charge edit
+  const [editingHandling, setEditingHandling] = useState(false);
+  const [handlingInput, setHandlingInput] = useState("");
 
   // Payment state
   const [payOpen, setPayOpen] = useState(false);
@@ -97,7 +103,7 @@ export default function PurchaseInvoiceDetailPage({
   useEffect(() => {
     if (productSearch.length < 2) { setSearchResults([]); return; }
     const t = setTimeout(async () => {
-      const res = await fetch(`/api/products/search?q=${encodeURIComponent(productSearch)}&limit=8`);
+      const res = await fetch(`/api/products/search?q=${encodeURIComponent(productSearch)}&limit=25`);
       const json = await res.json();
       setSearchResults(json.data ?? []);
     }, 300);
@@ -217,7 +223,37 @@ export default function PurchaseInvoiceDetailPage({
           <p className="text-xs text-gray-500">Grand Total</p>
         </CardContent></Card>
         <Card><CardContent className="py-4 text-center">
-          <p className="text-2xl font-bold">Rs.{Number(invoice.handlingCharge).toFixed(0)}</p>
+          {editingHandling ? (
+            <div className="flex items-center gap-1 justify-center">
+              <Input type="number" min="0" step="0.01" value={handlingInput}
+                onChange={(e) => setHandlingInput(e.target.value)}
+                className="w-24 h-8 text-center text-sm" autoFocus
+                onKeyDown={(e) => { if (e.key === "Escape") setEditingHandling(false); }}
+              />
+              <Button size="sm" variant="default" className="h-8" onClick={async () => {
+                setActionLoading(true);
+                const res = await fetch(`/api/purchase-invoices/${id}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ action: "updateHandlingCharge", handlingCharge: Number(handlingInput) || 0 }),
+                });
+                setActionLoading(false);
+                if (!res.ok) { const err = await res.json().catch(() => ({})); toast.error(err.error || "Failed"); return; }
+                toast.success("Handling charge updated");
+                setEditingHandling(false);
+                fetchInvoice();
+              }} disabled={actionLoading}>Save</Button>
+              <Button size="sm" variant="ghost" className="h-8" onClick={() => setEditingHandling(false)}>Cancel</Button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center gap-1">
+              <p className="text-2xl font-bold">Rs.{Number(invoice.handlingCharge).toFixed(0)}</p>
+              <button type="button" className="text-gray-400 hover:text-gray-600" onClick={() => {
+                setHandlingInput(String(Number(invoice.handlingCharge)));
+                setEditingHandling(true);
+              }}><Pencil className="h-3.5 w-3.5" /></button>
+            </div>
+          )}
           <p className="text-xs text-gray-500">Handling Charge</p>
         </CardContent></Card>
         <Card><CardContent className="py-4 text-center">
@@ -251,10 +287,12 @@ export default function PurchaseInvoiceDetailPage({
                 <TableHead className="text-right">Total Cost</TableHead>
                 <TableHead className="text-right">Selling Units</TableHead>
                 <TableHead className="text-right">Landed Cost/Unit</TableHead>
+                <TableHead className="w-10"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {invoice.items.map((item) => (
+              {invoice.items.map((item) => {
+                return (
                 <TableRow key={item.id}>
                   <TableCell>
                     <p className="font-medium text-sm">{item.product.name}</p>
@@ -267,8 +305,35 @@ export default function PurchaseInvoiceDetailPage({
                   <TableCell className="text-right font-medium text-blue-700">
                     {item.batch ? `Rs.${Number(item.batch.landedCostPerUnit).toFixed(2)}` : "—"}
                   </TableCell>
+                  <TableCell>
+                    {invoice.items.length > 1 && (
+                      <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-700 h-7 w-7 p-0"
+                        title="Remove item"
+                        disabled={actionLoading}
+                        onClick={async () => {
+                          if (!confirm(`Remove "${item.product.name}" from this invoice?`)) return;
+                          setActionLoading(true);
+                          const res = await fetch(`/api/purchase-invoices/${id}`, {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ action: "removeItem", itemId: item.id }),
+                          });
+                          setActionLoading(false);
+                          if (!res.ok) {
+                            const err = await res.json().catch(() => ({}));
+                            toast.error(err.error || "Failed to remove item");
+                            return;
+                          }
+                          toast.success("Item removed");
+                          fetchInvoice();
+                        }}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
         </CardContent>
@@ -319,14 +384,27 @@ export default function PurchaseInvoiceDetailPage({
               <Input value={productSearch} onChange={(e) => setProductSearch(e.target.value)} placeholder="Type product name..." autoFocus />
             </div>
             {searchResults.length > 0 && !newItemProductId && (
-              <div className="border rounded max-h-32 overflow-auto divide-y">
+              <div className="border rounded max-h-48 overflow-auto divide-y">
                 {searchResults.map((p) => (
                   <button key={p.id} type="button" className="w-full text-left px-2 py-1.5 text-sm hover:bg-gray-50"
                     onClick={() => { setNewItemProductId(p.id); setNewItemProductName(`${p.name} (${p.sku})`); setProductSearch(""); setSearchResults([]); }}>
                     {p.name} ({p.sku})
                   </button>
                 ))}
+                {searchResults.length === 25 && (
+                  <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                    Showing first 25 — keep typing to refine.
+                  </div>
+                )}
               </div>
+            )}
+            {productSearch.length >= 2 && searchResults.length === 0 && !newItemProductId && (
+              <p className="text-sm text-gray-500">
+                No products found.{" "}
+                <button type="button" className="text-blue-600 hover:underline" onClick={() => setQuickAddOpen(true)}>
+                  + Create new product
+                </button>
+              </p>
             )}
             {newItemProductId && (
               <div className="p-2 bg-blue-50 rounded text-sm flex justify-between">
@@ -347,6 +425,19 @@ export default function PurchaseInvoiceDetailPage({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <QuickAddProduct
+        open={quickAddOpen}
+        onOpenChange={setQuickAddOpen}
+        defaultName={productSearch}
+        submitLabel="Create & Add"
+        onProductCreated={(product) => {
+          setNewItemProductId(product.id);
+          setNewItemProductName(`${product.name} (${product.sku})`);
+          setProductSearch("");
+          setSearchResults([]);
+        }}
+      />
 
       {/* Record Payment Dialog */}
       <Dialog open={payOpen} onOpenChange={setPayOpen}>

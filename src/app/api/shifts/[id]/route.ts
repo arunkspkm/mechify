@@ -65,19 +65,76 @@ export async function GET(
     });
     const totalRefunds = approvedReturns.reduce((s, r) => s + Number(r.totalRefund), 0);
 
+    // Deduct cash advances given during this shift
+    const advanceTimeFilter: Record<string, unknown> = { gte: shift.startTime };
+    if (shift.endTime) advanceTimeFilter.lte = shift.endTime;
+    const cashAdvances = await prisma.advancePayment.findMany({
+      where: {
+        createdAt: advanceTimeFilter,
+        paymentMethod: { name: "Cash" },
+      },
+      select: { amount: true, employee: { select: { name: true } } },
+    });
+    const totalCashAdvances = cashAdvances.reduce((s, a) => s + Number(a.amount), 0);
+
+    // Deduct cash expenses recorded during this shift (createdAt within shift's open window)
+    const expenseTimeFilter: Record<string, unknown> = { gte: shift.startTime };
+    if (shift.endTime) expenseTimeFilter.lte = shift.endTime;
+    const cashExpenses = await prisma.expense.findMany({
+      where: {
+        createdAt: expenseTimeFilter,
+        paymentMethod: { name: "Cash" },
+      },
+      select: { amount: true, description: true },
+    });
+    const totalCashExpenses = cashExpenses.reduce((s, e) => s + Number(e.amount), 0);
+
+    // Add cash received from customer credit payments during this shift
+    const collectionTimeFilter: Record<string, unknown> = { gte: shift.startTime };
+    if (shift.endTime) collectionTimeFilter.lte = shift.endTime;
+    const customerCashPayments = await prisma.customerPayment.findMany({
+      where: {
+        date: collectionTimeFilter,
+        paymentMethod: { name: "Cash" },
+      },
+      select: { amount: true, customer: { select: { name: true } } },
+    });
+    const totalCashCollections = customerCashPayments.reduce((s, p) => s + Number(p.amount), 0);
+
+    // Deduct cash paid to suppliers during this shift
+    const supplierPaymentTimeFilter: Record<string, unknown> = { gte: shift.startTime };
+    if (shift.endTime) supplierPaymentTimeFilter.lte = shift.endTime;
+    const supplierCashPayments = await prisma.supplierPayment.findMany({
+      where: {
+        createdAt: supplierPaymentTimeFilter,
+        paymentMethod: { name: "Cash" },
+        isAdvanceApplication: false,
+      },
+      select: { amount: true, supplierId: true },
+    });
+    const totalSupplierPayments = supplierCashPayments.reduce((s, p) => s + Number(p.amount), 0);
+
     return NextResponse.json({
       data: {
         ...shift,
         approvedReturns,
+        cashAdvances,
+        cashExpenses,
+        customerCashPayments,
+        supplierCashPayments,
         summary: {
           totalSales,
           totalRefunds,
+          totalCashAdvances,
+          totalCashExpenses,
+          totalCashCollections,
+          totalSupplierPayments,
           returnCount: approvedReturns.length,
           invoiceCount: shift.invoices.length,
           totalItems,
           paymentTotals,
           openingBalance: Number(shift.openingBalance),
-          expectedCash: Number(shift.openingBalance) + (paymentTotals["Cash"] ?? 0) - totalRefunds,
+          expectedCash: Number(shift.openingBalance) + (paymentTotals["Cash"] ?? 0) + totalCashCollections - totalRefunds - totalCashAdvances - totalCashExpenses - totalSupplierPayments,
           actualCash: shift.actualCash ? Number(shift.actualCash) : null,
           variance: shift.variance ? Number(shift.variance) : null,
         },

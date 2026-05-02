@@ -44,6 +44,9 @@ export async function GET(
           where: { active: true, qtyRemaining: { gt: 0 } },
           orderBy: { purchaseDate: "asc" },
           take: 10,
+          include: {
+            supplier: { select: { id: true, name: true } },
+          },
         },
       },
     });

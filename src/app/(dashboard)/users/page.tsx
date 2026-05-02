@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/dialog";
 import { AsyncSelect } from "@/components/shared/async-select";
 import { toast } from "sonner";
-import { Plus, Key } from "lucide-react";
+import { Plus, Key, Trash2 } from "lucide-react";
 
 interface User {
   id: string;
@@ -45,6 +45,7 @@ export default function UsersPage() {
   const [newName, setNewName] = useState("");
   const [newRole, setNewRole] = useState("COUNTER_OPERATOR");
   const [creating, setCreating] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // Reset password dialog
   const [resetOpen, setResetOpen] = useState(false);
@@ -109,6 +110,20 @@ export default function UsersPage() {
     fetchUsers();
   }
 
+  async function handleDelete(user: User) {
+    if (!confirm(`Delete user "${user.username}"? This cannot be undone.`)) return;
+    setDeletingId(user.id);
+    const res = await fetch(`/api/users?id=${user.id}`, { method: "DELETE" });
+    setDeletingId(null);
+    if (!res.ok) {
+      const err = await res.json();
+      toast.error(err.error || "Failed to delete user");
+      return;
+    }
+    toast.success(`User "${user.username}" deleted`);
+    fetchUsers();
+  }
+
   async function handleResetPassword() {
     const res = await fetch("/api/users", {
       method: "PATCH",
@@ -162,7 +177,7 @@ export default function UsersPage() {
                   <TableCell>{user.name}</TableCell>
                   <TableCell>
                     <Badge variant={user.role === "OWNER" ? "default" : "secondary"}>
-                      {user.role === "OWNER" ? "Owner" : "Counter Operator"}
+                      {user.role === "OWNER" ? "Owner" : user.role === "MANAGER" ? "Manager" : "Counter Operator"}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-sm text-gray-500">
@@ -174,7 +189,7 @@ export default function UsersPage() {
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    <div className="flex gap-1">
+                    <div className="flex gap-1 items-center">
                       <Button
                         variant="ghost"
                         size="sm"
@@ -187,6 +202,16 @@ export default function UsersPage() {
                         title="Reset password"
                       >
                         <Key className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDelete(user)}
+                        disabled={deletingId === user.id}
+                        title="Delete user"
+                        className="text-red-500 hover:text-red-700"
+                      >
+                        <Trash2 className="h-4 w-4" />
                       </Button>
                       <Switch
                         checked={user.active}

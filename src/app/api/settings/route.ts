@@ -22,6 +22,7 @@ const settingsSchema = z.object({
   expiryAlertDays: z.coerce.number().nonnegative().optional(),
   backupTime: z.string().optional(),
   backupRetentionDays: z.coerce.number().nonnegative().optional(),
+  overridePin: z.string().min(4).max(6).regex(/^\d+$/, "PIN must be digits only").optional().nullable(),
 });
 
 // GET /api/settings — Get business config

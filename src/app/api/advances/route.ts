@@ -9,6 +9,8 @@ const createAdvanceSchema = z.object({
   amount: z.coerce.number().positive(),
   reason: z.string().optional().nullable(),
   date: z.string().optional(),
+  paymentMethodId: z.string().optional().nullable(),
+  reference: z.string().optional().nullable(),
 });
 
 // GET /api/advances?employeeId=xxx
@@ -28,7 +30,7 @@ export async function GET(req: NextRequest) {
 
   const advances = await prisma.advancePayment.findMany({
     where,
-    include: { employee: { select: { name: true } } },
+    include: { employee: { select: { name: true } }, paymentMethod: { select: { id: true, name: true } } },
     orderBy: { date: "desc" },
   });
 
@@ -58,6 +60,10 @@ export async function POST(req: NextRequest) {
       amount: parsed.data.amount,
       reason: parsed.data.reason ?? null,
       date: parsed.data.date ? new Date(parsed.data.date) : new Date(),
+      paymentMethod: parsed.data.paymentMethodId
+        ? { connect: { id: parsed.data.paymentMethodId } }
+        : undefined,
+      reference: parsed.data.reference ?? null,
     },
   });
 

@@ -49,6 +49,16 @@ interface CustomerReturnData {
   _count: { items: number };
 }
 
+interface SupplierReturnItem {
+  id: string;
+  qty: string;
+  unitCost: string;
+  totalCost: string;
+  reason: string;
+  product: { id: string; name: string; sku: string };
+  batch: { id: string; batchNumber: string | null };
+}
+
 interface SupplierReturnData {
   id: string;
   returnNumber: string;
@@ -58,6 +68,7 @@ interface SupplierReturnData {
   createdAt: string;
   notes: string | null;
   supplier: { name: string };
+  items: SupplierReturnItem[];
   _count: { items: number };
 }
 
@@ -151,7 +162,7 @@ export default function ReturnsPage() {
   useEffect(() => {
     if (sretProductSearch.length < 2) { setSretSearchResults([]); return; }
     const t = setTimeout(async () => {
-      const res = await fetch(`/api/products/search?q=${encodeURIComponent(sretProductSearch)}&limit=8`);
+      const res = await fetch(`/api/products/search?q=${encodeURIComponent(sretProductSearch)}&limit=25`);
       const json = await res.json();
       setSretSearchResults(json.data ?? []);
     }, 300);
@@ -162,11 +173,11 @@ export default function ReturnsPage() {
     setSretSelectedProductId(productId);
     const res = await fetch(`/api/products/${productId}`);
     const json = await res.json();
-    const batches = (json.data?.batches ?? []).map((b: { id: string; batchNumber: string | null; qtyRemaining: string; landedCostPerUnit: string; supplierId: string | null; supplier: { id: string; name: string } | null }) => ({
+    const batches = (json.data?.batches ?? []).map((b: { id: string; batchNumber: string | null; qtyRemaining: string; unitCost: string; landedCostPerUnit: string; supplierId: string | null; supplier: { id: string; name: string } | null }) => ({
       id: b.id,
-      name: `${b.batchNumber ?? "No #"} — Qty: ${Number(b.qtyRemaining)} — Rs.${Number(b.landedCostPerUnit).toFixed(2)}${b.supplier ? ` (${b.supplier.name})` : ""}`,
+      name: `${b.batchNumber ?? "No #"} — Qty: ${Number(b.qtyRemaining)} — Rs.${Number(b.unitCost).toFixed(2)}${b.supplier ? ` (${b.supplier.name})` : ""}`,
       qtyRemaining: Number(b.qtyRemaining),
-      unitCost: Number(b.landedCostPerUnit),
+      unitCost: Number(b.unitCost),
       supplierId: b.supplierId ?? b.supplier?.id ?? "",
       supplierName: b.supplier?.name ?? "Unknown",
     }));
@@ -530,46 +541,81 @@ export default function ReturnsPage() {
                     <RotateCcw className="mx-auto h-8 w-8 mb-2 text-gray-300" />
                     No supplier returns.
                   </TableCell></TableRow>
-                ) : supplierReturns.map((ret) => (
-                  <TableRow key={ret.id}>
-                    <TableCell className="font-medium">{ret.returnNumber}</TableCell>
-                    <TableCell className="text-sm">{new Date(ret.createdAt).toLocaleDateString("en-IN")}</TableCell>
-                    <TableCell>{ret.supplier.name}</TableCell>
-                    <TableCell className="text-center">{ret._count.items}</TableCell>
-                    <TableCell className="text-right">Rs.{Number(ret.totalAmount).toFixed(0)}</TableCell>
-                    <TableCell className="text-right text-green-600">
-                      {Number(ret.creditReceived) > 0 ? `Rs.${Number(ret.creditReceived).toFixed(0)}` : "—"}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={SRET_COLORS[ret.status] ?? "secondary"}>{ret.status}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex gap-1">
-                        {ret.status === "INITIATED" && (
-                          <Button size="sm" variant="ghost"
-                            onClick={() => handleSupplierReturnStatus(ret.id, "SHIPPED")}>
-                            Mark Shipped
-                          </Button>
-                        )}
-                        {ret.status === "SHIPPED" && (
-                          <Button size="sm" variant="ghost" className="text-green-600"
-                            onClick={() => {
-                              const credit = prompt("Credit amount received:", String(Number(ret.totalAmount)));
-                              if (credit) handleSupplierReturnStatus(ret.id, "CREDIT_RECEIVED", Number(credit));
-                            }}>
-                            Credit Received
-                          </Button>
-                        )}
-                        {(ret.status === "INITIATED" || ret.status === "SHIPPED") && (
-                          <Button size="sm" variant="ghost" className="text-red-600"
-                            onClick={() => handleSupplierReturnStatus(ret.id, "CANCELLED")}>
-                            <X className="h-4 w-4" />
-                          </Button>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                ) : supplierReturns.map((ret) => {
+                  const isExpanded = expandedReturn === ret.id;
+                  return (
+                    <React.Fragment key={ret.id}>
+                      <TableRow className="cursor-pointer" onClick={() => setExpandedReturn(isExpanded ? null : ret.id)}>
+                        <TableCell className="font-medium">{ret.returnNumber}</TableCell>
+                        <TableCell className="text-sm">{new Date(ret.createdAt).toLocaleDateString("en-IN")}</TableCell>
+                        <TableCell>{ret.supplier.name}</TableCell>
+                        <TableCell className="text-center">{ret._count.items}</TableCell>
+                        <TableCell className="text-right">Rs.{Number(ret.totalAmount).toFixed(0)}</TableCell>
+                        <TableCell className="text-right text-green-600">
+                          {Number(ret.creditReceived) > 0 ? `Rs.${Number(ret.creditReceived).toFixed(0)}` : "—"}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={SRET_COLORS[ret.status] ?? "secondary"}>{ret.status}</Badge>
+                        </TableCell>
+                        <TableCell onClick={(e) => e.stopPropagation()}>
+                          <div className="flex gap-1">
+                            {ret.status === "INITIATED" && (
+                              <Button size="sm" variant="ghost"
+                                onClick={() => handleSupplierReturnStatus(ret.id, "SHIPPED")}>
+                                Mark Shipped
+                              </Button>
+                            )}
+                            {ret.status === "SHIPPED" && (
+                              <Button size="sm" variant="ghost" className="text-green-600"
+                                onClick={() => {
+                                  const credit = prompt("Credit amount received:", String(Number(ret.totalAmount)));
+                                  if (credit) handleSupplierReturnStatus(ret.id, "CREDIT_RECEIVED", Number(credit));
+                                }}>
+                                Credit Received
+                              </Button>
+                            )}
+                            {(ret.status === "INITIATED" || ret.status === "SHIPPED") && (
+                              <Button size="sm" variant="ghost" className="text-red-600"
+                                onClick={() => handleSupplierReturnStatus(ret.id, "CANCELLED")}>
+                                <X className="h-4 w-4" />
+                              </Button>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                      {isExpanded && (
+                        <TableRow>
+                          <TableCell colSpan={8} className="bg-gray-50 p-4">
+                            <div className="space-y-2">
+                              {ret.items.map((item) => (
+                                <div key={item.id} className="flex items-center justify-between border rounded p-2 bg-white text-sm">
+                                  <div className="flex-1">
+                                    <p className="font-medium">
+                                      {item.product.name}
+                                      <span className="text-gray-400 ml-1">({item.product.sku})</span>
+                                      <span className="text-gray-500 ml-2">×{Number(item.qty)}</span>
+                                    </p>
+                                    <p className="text-xs text-gray-500">
+                                      Batch: {item.batch.batchNumber ?? "—"}
+                                      {" · "}
+                                      Rs.{Number(item.unitCost).toFixed(2)}/unit
+                                      {" · "}
+                                      Reason: {item.reason}
+                                    </p>
+                                  </div>
+                                  <p className="text-sm font-medium">Rs.{Number(item.totalCost).toFixed(0)}</p>
+                                </div>
+                              ))}
+                              {ret.notes && (
+                                <p className="text-xs text-gray-500 italic pt-1">Notes: {ret.notes}</p>
+                              )}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
               </TableBody>
             </Table>
           </div>
@@ -599,13 +645,18 @@ export default function ReturnsPage() {
                   placeholder="Search product..." className="pl-10 h-8 text-sm" />
               </div>
               {sretSearchResults.length > 0 && !sretSelectedProductId && (
-                <div className="border rounded max-h-28 overflow-auto divide-y">
+                <div className="border rounded max-h-48 overflow-auto divide-y">
                   {sretSearchResults.map((p) => (
                     <button key={p.id} type="button" className="w-full text-left px-2 py-1.5 text-sm hover:bg-gray-50"
                       onClick={() => loadBatchesForProduct(p.id)}>
                       {p.name} ({p.sku})
                     </button>
                   ))}
+                  {sretSearchResults.length === 25 && (
+                    <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                      Showing first 25 — keep typing to refine.
+                    </div>
+                  )}
                 </div>
               )}
               {sretBatches.length > 0 && (
@@ -621,6 +672,12 @@ export default function ReturnsPage() {
                 </div>
               )}
             </div>
+
+            {sretItems.length > 0 && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+                Refund uses base unit cost only. Handling charge is not refundable by supplier.
+              </p>
+            )}
 
             {/* Items list */}
             {sretItems.length > 0 && (

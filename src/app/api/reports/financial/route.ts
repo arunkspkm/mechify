@@ -70,19 +70,28 @@ export async function GET(req: NextRequest) {
       expenseByCategory[e.category.name] = (expenseByCategory[e.category.name] ?? 0) + Number(e.amount);
     }
 
-    // Salary payments in period
-    const salaryWhere: Record<string, unknown> = { status: "PAID" };
+    // Salary expense — use attendance-based accrual (not just paid)
+    // This reflects actual labor cost incurred in the period, regardless of payment timing
+    const attendanceWhere: Record<string, unknown> = {};
     if (from || to) {
-      const paidFilter: Record<string, unknown> = {};
-      if (from) paidFilter.gte = new Date(from);
-      if (to) paidFilter.lte = new Date(to + "T23:59:59");
-      salaryWhere.paidDate = paidFilter;
+      const attFilter: Record<string, unknown> = {};
+      if (from) attFilter.gte = new Date(from);
+      if (to) attFilter.lte = new Date(to + "T23:59:59");
+      attendanceWhere.date = attFilter;
     }
-    const salaryAgg = await prisma.salaryRecord.aggregate({
-      where: salaryWhere,
-      _sum: { paidAmount: true },
+    const attendanceInPeriod = await prisma.attendance.findMany({
+      where: attendanceWhere,
+      include: { employee: { select: { dailyWage: true, onCallRate: true } } },
     });
-    const totalSalaries = Number(salaryAgg._sum.paidAmount ?? 0);
+    let totalSalaries = 0;
+    for (const a of attendanceInPeriod) {
+      const dailyWage = Number(a.employee.dailyWage) || 0;
+      const onCallRate = Number(a.employee.onCallRate) || 0;
+      if (a.status === "PRESENT") totalSalaries += dailyWage;
+      else if (a.status === "HALF_DAY") totalSalaries += dailyWage * 0.5;
+      else if (a.status === "ON_CALL") totalSalaries += (onCallRate || dailyWage);
+    }
+    totalSalaries = Math.round(totalSalaries);
 
     // Supplier payments
     const supplierPayWhere: Record<string, unknown> = {};

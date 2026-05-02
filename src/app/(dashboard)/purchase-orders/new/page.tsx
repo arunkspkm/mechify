@@ -12,6 +12,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { AsyncSelect } from "@/components/shared/async-select";
+import { QuickAddProduct } from "@/components/shared/quick-add-product";
 import { toast } from "sonner";
 import { Plus, Trash2, Search, Zap } from "lucide-react";
 
@@ -57,6 +58,7 @@ function NewPurchaseOrderContent() {
     id: string; name: string; sku: string;
     lastBatch?: { supplierId: string | null; supplierName: string | null; unitCost: number };
   }[]>([]);
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
 
   // Auto-generate state
   const [autoData, setAutoData] = useState<{
@@ -85,7 +87,7 @@ function NewPurchaseOrderContent() {
   useEffect(() => {
     if (productSearch.length < 2) { setSearchResults([]); return; }
     const t = setTimeout(async () => {
-      const res = await fetch(`/api/products/search?q=${encodeURIComponent(productSearch)}&limit=8`);
+      const res = await fetch(`/api/products/search?q=${encodeURIComponent(productSearch)}&limit=25`);
       const json = await res.json();
       setSearchResults(json.data ?? []);
     }, 300);
@@ -256,8 +258,31 @@ function NewPurchaseOrderContent() {
                       </button>
                     );
                   })}
+                  {searchResults.length === 25 && (
+                    <div className="px-3 py-2 text-xs text-muted-foreground">
+                      Showing first 25 — keep typing to refine.
+                    </div>
+                  )}
                 </div>
               )}
+              {productSearch.length >= 2 && searchResults.length === 0 && (
+                <p className="text-sm text-gray-500">
+                  No products found.{" "}
+                  <button type="button" className="text-blue-600 hover:underline" onClick={() => setQuickAddOpen(true)}>
+                    + Create new product
+                  </button>
+                </p>
+              )}
+              <QuickAddProduct
+                open={quickAddOpen}
+                onOpenChange={setQuickAddOpen}
+                defaultName={productSearch}
+                submitLabel="Create & Add to PO"
+                onProductCreated={(product) => {
+                  addProduct({ id: product.id, name: product.name, sku: product.sku });
+                  setProductSearch("");
+                }}
+              />
             </CardContent>
           </Card>
 

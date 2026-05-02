@@ -63,13 +63,13 @@ export async function GET(req: NextRequest) {
     prisma.supplier.count({ where }),
   ]);
 
-  // Compute actual outstanding from purchase invoices
+  // Compute actual outstanding from purchase invoices + opening balance
   const data = suppliers.map((s) => {
-    const computedOutstanding = s.purchaseInvoices.reduce(
+    const invoiceOutstanding = s.purchaseInvoices.reduce(
       (sum, pi) => sum + Number(pi.outstandingAmount), 0
     );
     const { purchaseInvoices, ...rest } = s;
-    return { ...rest, outstandingBalance: computedOutstanding };
+    return { ...rest, outstandingBalance: invoiceOutstanding + Number(s.openingBalance) };
   });
 
   return NextResponse.json({ data, total });

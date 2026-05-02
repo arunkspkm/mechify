@@ -19,6 +19,7 @@ const invoiceItemSchema = z.object({
   discountAmount: z.coerce.number().nonnegative().default(0),
   installationCharge: z.coerce.number().nonnegative().default(0),
   taxRatePercent: z.coerce.number().nonnegative().default(0),
+  ownerOverride: z.boolean().default(false),
 });
 
 const paymentSchema = z.object({
@@ -241,7 +242,7 @@ export async function POST(req: NextRequest) {
       : defaultMaxDiscount;
     const discountPercent =
       item.unitPrice > 0 ? (item.discountAmount / item.unitPrice) * 100 : 0;
-    if (!isOwner && discountPercent > maxDiscount) {
+    if (!isOwner && !item.ownerOverride && discountPercent > maxDiscount) {
       return NextResponse.json(
         {
           error: `Discount on "${product.name}" (${discountPercent.toFixed(1)}%) exceeds max allowed (${maxDiscount}%). Owner approval required.`,
@@ -268,7 +269,7 @@ export async function POST(req: NextRequest) {
     // Create invoice items per batch allocation
     for (const alloc of batchAllocations) {
       // Validate discount percentage cap (from Settings + product-level)
-      if (!isOwner && item.discountAmount > 0 && item.unitPrice > 0) {
+      if (!isOwner && !item.ownerOverride && item.discountAmount > 0 && item.unitPrice > 0) {
         const maxPct = product.maxDiscountPercent != null ? Number(product.maxDiscountPercent) : Number(config?.defaultDiscountMax ?? 100);
         const discPct = (item.discountAmount / item.unitPrice) * 100;
         if (maxPct < 100 && discPct > maxPct) {
@@ -284,7 +285,7 @@ export async function POST(req: NextRequest) {
         item.unitPrice,
         item.discountAmount,
         alloc.landedCostPerUnit,
-        isOwner
+        isOwner || item.ownerOverride
       );
       if (!marginCheck.allowed) {
         return NextResponse.json(
@@ -518,6 +519,21 @@ export async function POST(req: NextRequest) {
         operator: { select: { name: true } },
       },
     });
+
+    // Notify owner if override was used
+    const overriddenItems = items.filter((i) => i.ownerOverride);
+    if (overriddenItems.length > 0 && !isOwner) {
+      try {
+        const names = overriddenItems.map((i) => i.customItemName || i.productId?.slice(-6) || "item").join(", ");
+        await createNotification({
+          type: "DISCOUNT_OVERRIDE",
+          title: "Discount Override Used",
+          message: `${session.user.name} used owner override on invoice ${invoiceNumber} (${overriddenItems.length} item${overriddenItems.length > 1 ? "s" : ""})`,
+          link: `/billing/invoices/${invoice.id}`,
+          recipientRole: "OWNER",
+        });
+      } catch {}
+    }
 
     return NextResponse.json({ data: fullInvoice }, { status: 201 });
   } catch (innerErr) {

@@ -1,0 +1,15 @@
+node_modules
+.next
+.git
+.vscode
+.claude
+*.log
+.env
+.env.*.local
+Dockerfile
+.dockerignore
+README.md
+AGENTS.md
+CLAUDE.md
+DEPLOY-WINDOWS.md
+docs

@@ -79,7 +79,7 @@ export default function NewEstimatePage() {
   useEffect(() => {
     if (productSearch.length < 1) { setSearchResults([]); return; }
     const timer = setTimeout(async () => {
-      const res = await fetch(`/api/products/search?q=${encodeURIComponent(productSearch)}&limit=10`);
+      const res = await fetch(`/api/products/search?q=${encodeURIComponent(productSearch)}&limit=25`);
       const json = await res.json();
       setSearchResults(json.data ?? []);
     }, 250);
@@ -104,13 +104,15 @@ export default function NewEstimatePage() {
 
   function addProduct(p: Record<string, unknown>) {
     const taxRate = ((p.taxRate as Record<string, unknown>)?.metadata as Record<string, number> | null)?.rate ?? 0;
+    const bundleSize = Number(p.bundleSize) || 1;
+    const perUnitPrice = Number(p.sellingPrice) / bundleSize;
     setCartItems((prev) => [...prev, {
       key: ++cartKeyCounter,
       productId: p.id as string,
       isCustomItem: false,
       productName: p.name as string,
       qty: "1",
-      unitPrice: String(Number(p.sellingPrice)),
+      unitPrice: String(perUnitPrice),
       discountAmount: "0",
       installationCharge: String(Number(p.installationCharge)),
       taxRatePercent: taxRate,
@@ -269,9 +271,14 @@ export default function NewEstimatePage() {
                 className="w-full text-left px-3 py-2 hover:bg-gray-50 flex justify-between"
                 onClick={() => addProduct(p)}>
                 <span className="font-medium text-sm">{p.name as string} <span className="text-gray-500">({p.sku as string})</span></span>
-                <span className="text-sm">Rs.{Number(p.sellingPrice as number).toFixed(0)}</span>
+                <span className="text-sm">Rs.{(Number(p.sellingPrice as number) / (Number(p.bundleSize) || 1)).toFixed(2)}</span>
               </button>
             ))}
+            {searchResults.length === 25 && (
+              <div className="px-3 py-2 text-xs text-muted-foreground">
+                Showing first 25 — keep typing to refine.
+              </div>
+            )}
           </div>
         )}
       </div>

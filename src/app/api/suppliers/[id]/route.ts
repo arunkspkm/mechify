@@ -14,7 +14,15 @@ const updateSupplierSchema = z.object({
   qualityRating: z.coerce.number().min(1).max(5).optional(),
   paymentTerms: z.string().optional().nullable(),
   creditPeriodDays: z.coerce.number().nonnegative().optional().nullable(),
+  openingBalance: z.coerce.number().nonnegative().optional(),
   active: z.boolean().optional(),
+});
+
+const bulkPaymentSchema = z.object({
+  amount: z.coerce.number().positive(),
+  paymentMethodId: z.string().min(1),
+  reference: z.string().optional().nullable(),
+  notes: z.string().optional().nullable(),
 });
 
 // GET /api/suppliers/[id]
@@ -72,9 +80,10 @@ export async function GET(
       where: { supplierId: id, status: { not: "CANCELLED" } },
       select: { outstandingAmount: true },
     });
-    const computedOutstanding = allInvoices.reduce(
+    const invoiceOutstanding = allInvoices.reduce(
       (sum, pi) => sum + Number(pi.outstandingAmount), 0
     );
+    const computedOutstanding = invoiceOutstanding + Number(supplier.openingBalance);
 
     // Get advance payment summary
     const advances = await prisma.supplierPayment.findMany({
@@ -131,5 +140,116 @@ export async function PATCH(
   } catch (err) {
     console.error("Supplier update error:", err);
     return NextResponse.json({ error: "Failed to update supplier" }, { status: 500 });
+  }
+}
+
+// POST /api/suppliers/[id] — Bulk payment (auto-distribute oldest-first)
+export async function POST(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const session = await auth();
+  if (!session || session.user.role !== "OWNER") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const { id } = await params;
+  const body = await req.json();
+  const parsed = bulkPaymentSchema.safeParse(body);
+
+  if (!parsed.success) {
+    return NextResponse.json({ error: formatValidationError(parsed.error) }, { status: 400 });
+  }
+
+  try {
+    const supplier = await prisma.supplier.findUnique({ where: { id } });
+    if (!supplier) {
+      return NextResponse.json({ error: "Supplier not found" }, { status: 404 });
+    }
+
+    let remaining = parsed.data.amount;
+    const distributions: { type: string; id?: string; invoiceNumber?: string; amount: number }[] = [];
+
+    // 1. Settle opening balance first (oldest debt)
+    const openingBal = Number(supplier.openingBalance);
+    if (openingBal > 0 && remaining > 0) {
+      const applied = Math.min(remaining, openingBal);
+      await prisma.supplier.update({
+        where: { id },
+        data: { openingBalance: openingBal - applied },
+      });
+      distributions.push({ type: "opening_balance", amount: applied });
+      remaining -= applied;
+    }
+
+    // 2. Settle pending invoices oldest-first
+    if (remaining > 0) {
+      const pendingInvoices = await prisma.purchaseInvoice.findMany({
+        where: { supplierId: id, status: { not: "CANCELLED" }, outstandingAmount: { gt: 0 } },
+        orderBy: { invoiceDate: "asc" },
+        select: { id: true, invoiceNumber: true, outstandingAmount: true, amountPaid: true },
+      });
+
+      for (const inv of pendingInvoices) {
+        if (remaining <= 0) break;
+        const outstanding = Number(inv.outstandingAmount);
+        if (outstanding <= 0) continue;
+        const applied = Math.min(remaining, outstanding);
+
+        await prisma.purchaseInvoice.update({
+          where: { id: inv.id },
+          data: {
+            amountPaid: { increment: applied },
+            outstandingAmount: { decrement: applied },
+            status: applied >= outstanding ? "PAID" : undefined,
+          },
+        });
+
+        // Record supplier payment for this invoice
+        await prisma.supplierPayment.create({
+          data: {
+            supplierId: id,
+            purchaseInvoiceId: inv.id,
+            amount: applied,
+            paymentMethodId: parsed.data.paymentMethodId,
+            reference: parsed.data.reference ?? null,
+            notes: parsed.data.notes ?? null,
+          },
+        });
+
+        distributions.push({
+          type: "invoice",
+          id: inv.id,
+          invoiceNumber: inv.invoiceNumber ?? inv.id.slice(-6),
+          amount: applied,
+        });
+        remaining -= applied;
+      }
+    }
+
+    // 3. If anything left over, record as supplier advance
+    if (remaining > 0) {
+      await prisma.supplierPayment.create({
+        data: {
+          supplierId: id,
+          amount: remaining,
+          paymentMethodId: parsed.data.paymentMethodId,
+          reference: parsed.data.reference ?? null,
+          notes: `Advance from bulk payment${parsed.data.notes ? ` — ${parsed.data.notes}` : ""}`,
+          isAdvance: true,
+        },
+      });
+      distributions.push({ type: "advance", amount: remaining });
+    }
+
+    return NextResponse.json({
+      data: {
+        totalPaid: parsed.data.amount,
+        distributions,
+      },
+    });
+  } catch (err) {
+    console.error("Supplier bulk payment error:", err);
+    return NextResponse.json({ error: "Failed to process payment" }, { status: 500 });
   }
 }

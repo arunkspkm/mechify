@@ -41,8 +41,8 @@ export async function GET(req: NextRequest) {
     prisma.expense.findMany({
       where,
       include: {
-        category: { select: { name: true } },
-        paymentMethod: { select: { name: true } },
+        category: { select: { id: true, name: true } },
+        paymentMethod: { select: { id: true, name: true } },
       },
       orderBy: { date: "desc" },
       skip: (page - 1) * limit,

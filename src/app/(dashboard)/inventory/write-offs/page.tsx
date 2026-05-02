@@ -94,7 +94,7 @@ export default function WriteOffsPage() {
   useEffect(() => {
     if (productSearch.length < 2) return;
     const timer = setTimeout(async () => {
-      const res = await fetch(`/api/products/search?q=${encodeURIComponent(productSearch)}`);
+      const res = await fetch(`/api/products/search?q=${encodeURIComponent(productSearch)}&limit=25`);
       const json = await res.json();
       setProducts(json.data ?? []);
     }, 300);
@@ -297,6 +297,11 @@ export default function WriteOffsPage() {
                   options={products.map((p) => ({ id: p.id, name: `${p.name} (${p.sku})` }))}
                   placeholder="Select product..."
                 />
+                {products.length === 25 && (
+                  <p className="text-xs text-muted-foreground">
+                    Showing first 25 — keep typing to refine.
+                  </p>
+                )}
               </div>
             )}
 

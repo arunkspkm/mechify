@@ -26,21 +26,25 @@ export function CompanionItemsPicker({
 }: CompanionItemsPickerProps) {
   const [search, setSearch] = useState("");
   const [results, setResults] = useState<CompanionProduct[]>([]);
+  const [rawCount, setRawCount] = useState(0);
   const [searching, setSearching] = useState(false);
 
   useEffect(() => {
     if (search.length < 2) {
       setResults([]);
+      setRawCount(0);
       return;
     }
 
     const timer = setTimeout(async () => {
       setSearching(true);
-      const res = await fetch(`/api/products/search?q=${encodeURIComponent(search)}&limit=10`);
+      const res = await fetch(`/api/products/search?q=${encodeURIComponent(search)}&limit=25`);
       const json = await res.json();
+      const raw = (json.data ?? []) as CompanionProduct[];
+      setRawCount(raw.length);
       // Filter out already selected and self
-      const filtered = (json.data ?? []).filter(
-        (p: CompanionProduct) =>
+      const filtered = raw.filter(
+        (p) =>
           p.id !== excludeProductId &&
           !selectedItems.some((s) => s.id === p.id)
       );
@@ -114,6 +118,11 @@ export function CompanionItemsPicker({
               </Button>
             </div>
           ))}
+          {rawCount === 25 && (
+            <div className="px-3 py-2 text-xs text-muted-foreground">
+              Showing first 25 — keep typing to refine.
+            </div>
+          )}
         </div>
       )}
 

@@ -83,7 +83,7 @@ export async function GET(req: NextRequest) {
       prisma.stockWriteOff.count({ where: { status: "PENDING" } }),
       // Open enquiries
       prisma.customerEnquiry.count({
-        where: { status: { in: ["ENQUIRY_RECORDED", "ORDER_PLACED", "IN_TRANSIT", "RECEIVED", "CUSTOMER_NOTIFIED"] } },
+        where: { status: { in: ["ENQUIRY_RECORDED", "CONFIRMED", "ORDER_PLACED", "IN_TRANSIT", "RECEIVED", "CUSTOMER_NOTIFIED"] } },
       }),
       // Total customers
       prisma.customer.count(),
@@ -262,7 +262,7 @@ export async function GET(req: NextRequest) {
     sixtyDaysAgo.setDate(now.getDate() - 60);
     const allActiveProducts = await prisma.product.findMany({
       where: { active: true, createdAt: { lt: sixtyDaysAgo } },
-      select: { id: true, name: true, sellingPrice: true, batches: { where: { active: true }, select: { qtyRemaining: true } } },
+      select: { id: true, name: true, sellingPrice: true, bundleSize: true, batches: { where: { active: true }, select: { qtyRemaining: true } } },
     });
     const recentlySoldProductIds = await prisma.invoiceItem.findMany({
       where: { invoice: { date: { gte: sixtyDaysAgo }, status: { not: "CANCELLED" } }, productId: { not: null } },
@@ -274,7 +274,8 @@ export async function GET(req: NextRequest) {
       .filter((p) => !soldIds.has(p.id))
       .map((p) => {
         const stock = p.batches.reduce((s, b) => s + Number(b.qtyRemaining), 0);
-        return { name: p.name, stock, value: stock * Number(p.sellingPrice) };
+        const perUnitPrice = Number(p.sellingPrice) / (Number(p.bundleSize) || 1);
+        return { name: p.name, stock, value: stock * perUnitPrice };
       })
       .filter((p) => p.stock > 0)
       .sort((a, b) => b.value - a.value);
@@ -310,6 +311,7 @@ export async function GET(req: NextRequest) {
     }
 
     const businessHealth = {
+      totalCOGS: Math.round(totalCOGS),
       revenueGrowth: Math.round(revenueGrowth * 10) / 10,
       lastMonthRevenue,
       avgBillValue: Math.round(avgBillValue),
@@ -330,6 +332,110 @@ export async function GET(req: NextRequest) {
       convertedEnquiries,
       receivablesAging: aging,
     };
+
+    // ========== Cash Position (real-time) ==========
+    const openShift = await prisma.shift.findFirst({
+      where: { status: "OPEN" },
+      orderBy: { startTime: "desc" },
+      select: { id: true, startTime: true, date: true, openingBalance: true, operator: { select: { name: true } } },
+    });
+
+    let cashPosition: {
+      hasOpenShift: boolean;
+      shiftId: string | null;
+      operatorName: string | null;
+      openingBalance: number;
+      cashSales: number;
+      cashCollections: number;
+      cashRefunds: number;
+      cashAdvances: number;
+      cashExpenses: number;
+      cashSupplierPayments: number;
+      expectedCash: number;
+    } | null = null;
+
+    if (openShift) {
+      // Cash payments from invoices during this shift
+      const shiftInvoices = await prisma.invoicePayment.findMany({
+        where: {
+          createdAt: { gte: openShift.startTime },
+          paymentMethod: { name: "Cash" },
+          invoice: { status: { not: "CANCELLED" } },
+        },
+        select: { amount: true },
+      });
+      const cashSales = shiftInvoices.reduce((s, p) => s + Number(p.amount), 0);
+
+      // Cash refunds during shift
+      const shiftRefunds = await prisma.customerReturn.aggregate({
+        where: { status: "APPROVED", updatedAt: { gte: openShift.startTime } },
+        _sum: { totalRefund: true },
+      });
+      const cashRefunds = Number(shiftRefunds._sum.totalRefund ?? 0);
+
+      // Cash advances during shift
+      const shiftAdvances = await prisma.advancePayment.findMany({
+        where: { createdAt: { gte: openShift.startTime }, paymentMethod: { name: "Cash" } },
+        select: { amount: true },
+      });
+      const cashAdvances = shiftAdvances.reduce((s, a) => s + Number(a.amount), 0);
+
+      // Cash expenses recorded during this shift (createdAt >= shift open)
+      const shiftExpenses = await prisma.expense.findMany({
+        where: { createdAt: { gte: openShift.startTime }, paymentMethod: { name: "Cash" } },
+        select: { amount: true },
+      });
+      const cashExpenses = shiftExpenses.reduce((s, e) => s + Number(e.amount), 0);
+
+      // Cash collections from customer credit payments
+      const shiftCollections = await prisma.customerPayment.findMany({
+        where: { date: { gte: openShift.startTime }, paymentMethod: { name: "Cash" } },
+        select: { amount: true },
+      });
+      const cashCollections = shiftCollections.reduce((s, p) => s + Number(p.amount), 0);
+
+      // Cash paid to suppliers during shift (exclude advance-application audit rows)
+      const shiftSupplierPayments = await prisma.supplierPayment.findMany({
+        where: {
+          createdAt: { gte: openShift.startTime },
+          paymentMethod: { name: "Cash" },
+          isAdvanceApplication: false,
+        },
+        select: { amount: true },
+      });
+      const cashSupplierPayments = shiftSupplierPayments.reduce((s, p) => s + Number(p.amount), 0);
+
+      const openingBalance = Number(openShift.openingBalance);
+      const expectedCash = openingBalance + cashSales + cashCollections - cashRefunds - cashAdvances - cashExpenses - cashSupplierPayments;
+
+      cashPosition = {
+        hasOpenShift: true,
+        shiftId: openShift.id,
+        operatorName: openShift.operator.name,
+        openingBalance,
+        cashSales,
+        cashCollections,
+        cashRefunds,
+        cashAdvances,
+        cashExpenses,
+        cashSupplierPayments,
+        expectedCash,
+      };
+    } else {
+      cashPosition = {
+        hasOpenShift: false,
+        shiftId: null,
+        operatorName: null,
+        openingBalance: 0,
+        cashSales: 0,
+        cashCollections: 0,
+        cashRefunds: 0,
+        cashAdvances: 0,
+        cashExpenses: 0,
+        cashSupplierPayments: 0,
+        expectedCash: 0,
+      };
+    }
 
     // ========== Supplier Payment Due Dates ==========
     const threeDaysFromNow = new Date(now);
@@ -386,6 +492,16 @@ export async function GET(req: NextRequest) {
       }
     } catch {}
 
+    // Calculate total supplier payables including opening balances
+    const invoicePayables = Number(pendingPayables._sum.outstandingAmount ?? 0);
+    const supplierOpeningBalances = await prisma.supplier.aggregate({ where: { active: true, openingBalance: { gt: 0 } }, _sum: { openingBalance: true } });
+    const totalPendingPayables = invoicePayables + Number(supplierOpeningBalances._sum.openingBalance ?? 0);
+
+    // Calculate total customer receivables including opening balances
+    const invoiceReceivables = Number(pendingReceivables._sum.outstandingAmount ?? 0);
+    const customerOpeningBalances = await prisma.customer.aggregate({ where: { openingBalance: { gt: 0 } }, _sum: { openingBalance: true } });
+    const totalPendingReceivables = invoiceReceivables + Number(customerOpeningBalances._sum.openingBalance ?? 0);
+
     return NextResponse.json({
       data: {
         todaySales: Number(todaySales._sum.grandTotal ?? 0) - todayRefundAmt,
@@ -396,8 +512,8 @@ export async function GET(req: NextRequest) {
         todayInvoiceCount,
         monthInvoiceCount,
         monthExpenses: Number(monthlyExpenses._sum.amount ?? 0),
-        pendingPayables: Number(pendingPayables._sum.outstandingAmount ?? 0),
-        pendingReceivables: Number(pendingReceivables._sum.outstandingAmount ?? 0),
+        pendingPayables: totalPendingPayables,
+        pendingReceivables: totalPendingReceivables,
         pendingReturns,
         pendingWriteOffs,
         openEnquiries,
@@ -409,6 +525,7 @@ export async function GET(req: NextRequest) {
         salesChart,
         businessHealth,
         supplierDueList,
+        cashPosition,
       },
     });
   } catch (err) {

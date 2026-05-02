@@ -21,6 +21,7 @@ services:
       db:
         condition: service_healthy
     environment:
+      HOSTNAME: 0.0.0.0
       DATABASE_URL: postgresql://mechify:${DB_PASSWORD:-mechify_secret}@db:5432/mechify
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-change_this_in_production}
       NEXTAUTH_URL: http://localhost:3000

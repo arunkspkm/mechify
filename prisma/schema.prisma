@@ -31,6 +31,7 @@ model User {
   purchaseOrdersCreated      PurchaseOrder[]
   returnsProcessed           CustomerReturn[] @relation("ReturnProcessedBy")
   notifications              Notification[]   @relation("NotificationRecipient")
+  enquiryNotes               EnquiryNote[]
 }
 
 model Notification {
@@ -99,6 +100,8 @@ model MasterData {
   expensesByPayment      Expense[]          @relation("ExpensePaymentMethod")
   supplierPayments       SupplierPayment[]  @relation("SupplierPaymentMethod")
   returnItemReasons      CustomerReturnItem[] @relation("ReturnItemReason")
+  advancePaymentMethods  AdvancePayment[]     @relation("AdvancePaymentMethod")
+  salaryPaymentMethods   SalaryRecord[]       @relation("SalaryPaymentMethod")
 
   @@unique([type, name])
   @@index([type, active])
@@ -142,6 +145,7 @@ model BusinessConfig {
   expiryAlertDays         Int     @default(30)
   backupTime              String  @default("22:00")
   backupRetentionDays     Int     @default(30)
+  overridePin             String?
   updatedAt               DateTime @updatedAt
 }
 
@@ -244,6 +248,7 @@ model Supplier {
   paymentTerms     String?
   creditPeriodDays Int?
   outstandingBalance Decimal @default(0)
+  openingBalance     Decimal @default(0)
   active           Boolean  @default(true)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
@@ -317,6 +322,7 @@ model SupplierPayment {
   notes               String?
   isAdvance           Boolean         @default(false)
   adjustedAmount      Decimal         @default(0)  // how much of this advance has been applied to invoices
+  isAdvanceApplication Boolean        @default(false) // true = row was created when applying an existing advance/overpayment; cash already left drawer earlier
   date                DateTime        @default(now())
   createdAt           DateTime        @default(now())
 
@@ -456,6 +462,7 @@ model Customer {
   loyaltyTier        MasterData? @relation("CustomerLoyaltyTier", fields: [loyaltyTierId], references: [id])
   creditLimit        Decimal  @default(0)
   outstandingBalance Decimal  @default(0)
+  openingBalance     Decimal  @default(0)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -729,12 +736,27 @@ model CustomerEnquiry {
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 
+  notesLog         EnquiryNote[]
+
   @@index([status])
   @@index([customerPhone])
 }
 
+model EnquiryNote {
+  id         String          @id @default(cuid())
+  enquiryId  String
+  enquiry    CustomerEnquiry @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+  message    String
+  userId     String
+  user       User            @relation(fields: [userId], references: [id])
+  createdAt  DateTime        @default(now())
+
+  @@index([enquiryId, createdAt])
+}
+
 enum EnquiryStatus {
   ENQUIRY_RECORDED
+  CONFIRMED
   ORDER_PLACED
   IN_TRANSIT
   RECEIVED
@@ -908,28 +930,33 @@ enum AttendanceStatus {
 }
 
 model SalaryRecord {
-  id              String       @id @default(cuid())
-  employeeId      String
-  employee        Employee     @relation(fields: [employeeId], references: [id])
-  periodType      PeriodType   @default(WEEKLY)
-  periodStart     DateTime     @db.Date
-  periodEnd       DateTime     @db.Date
-  dailyWage       Decimal      @default(0)  // snapshot of rate at time of settlement
-  presentDays     Int          @default(0)
-  halfDays        Int          @default(0)
-  onCallDays      Int          @default(0)
-  onCallAmount    Decimal      @default(0)
-  baseSalary      Decimal      @default(0)  // presentDays × dailyWage + halfDays × 0.5 × dailyWage
-  totalAdvances   Decimal      @default(0)  // deducted
-  bonus           Decimal      @default(0)
-  deductions      Decimal      @default(0)  // other deductions
-  netPayable      Decimal      @default(0)
-  paidAmount      Decimal      @default(0)
-  status          SalaryStatus @default(PENDING)
-  paidDate        DateTime?
-  notes           String?
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  id                String       @id @default(cuid())
+  employeeId        String
+  employee          Employee     @relation(fields: [employeeId], references: [id])
+  periodType        PeriodType   @default(WEEKLY)
+  periodStart       DateTime     @db.Date
+  periodEnd         DateTime     @db.Date
+  dailyWage         Decimal      @default(0)  // snapshot of rate at time of settlement
+  presentDays       Int          @default(0)
+  halfDays          Int          @default(0)
+  onCallDays        Int          @default(0)
+  onCallAmount      Decimal      @default(0)
+  baseSalary        Decimal      @default(0)  // presentDays × dailyWage + halfDays × 0.5 × dailyWage
+  totalAdvances     Decimal      @default(0)  // deducted
+  bonus             Decimal      @default(0)
+  deductions        Decimal      @default(0)  // other deductions
+  netPayable        Decimal      @default(0)
+  paidAmount        Decimal      @default(0)
+  status            SalaryStatus @default(PENDING)
+  paidDate          DateTime?
+  paymentMethodId   String?
+  paymentMethod     MasterData?  @relation("SalaryPaymentMethod", fields: [paymentMethodId], references: [id])
+  paymentReference  String?
+  notes             String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  deductedAdvances  AdvancePayment[] @relation("AdvanceDeductedIn")
 
   @@unique([employeeId, periodStart, periodEnd])
   @@index([periodStart])
@@ -947,17 +974,23 @@ enum SalaryStatus {
 }
 
 model AdvancePayment {
-  id              String     @id @default(cuid())
+  id              String      @id @default(cuid())
   employeeId      String
-  employee        Employee   @relation(fields: [employeeId], references: [id])
+  employee        Employee    @relation(fields: [employeeId], references: [id])
   amount          Decimal
   reason          String?
-  date            DateTime   @default(now()) @db.Date
-  deductedInMonth Int?       // month when deducted from salary
-  deductedInYear  Int?       // year when deducted from salary
-  createdAt       DateTime   @default(now())
+  date            DateTime    @default(now()) @db.Date
+  paymentMethodId String?
+  paymentMethod   MasterData? @relation("AdvancePaymentMethod", fields: [paymentMethodId], references: [id])
+  reference       String?
+  deductedInMonth Int?        // month when deducted from salary (legacy + display)
+  deductedInYear  Int?        // year when deducted from salary (legacy + display)
+  deductedInSalaryRecordId String?  // exact settlement that consumed this advance — used by reverse to un-mark only this week's advances
+  deductedInSalaryRecord   SalaryRecord? @relation("AdvanceDeductedIn", fields: [deductedInSalaryRecordId], references: [id])
+  createdAt       DateTime    @default(now())
 
   @@index([employeeId])
+  @@index([deductedInSalaryRecordId])
 }
 
 // ==================== EXPENSES ====================

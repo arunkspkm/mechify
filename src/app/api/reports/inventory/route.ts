@@ -13,12 +13,13 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const type = searchParams.get("type") ?? "stock";
   const format = searchParams.get("format") ?? "json";
+  const toParam = searchParams.get("to");
 
   try {
     const products = await prisma.product.findMany({
       where: { active: true },
       select: {
-        id: true, name: true, sku: true, sellingPrice: true, lowStockThreshold: true, hasExpiry: true,
+        id: true, name: true, sku: true, sellingPrice: true, bundleSize: true, lowStockThreshold: true, hasExpiry: true,
         category: { select: { name: true } },
         batches: {
           where: { active: true },
@@ -29,9 +30,12 @@ export async function GET(req: NextRequest) {
     });
 
     const now = new Date();
-    const alertDays = 30;
-    const alertDate = new Date(now);
-    alertDate.setDate(now.getDate() + alertDays);
+    // Near-expiry cutoff: use `to` if provided, else default to today + 30 days.
+    const alertDate = toParam ? new Date(toParam) : (() => {
+      const d = new Date(now);
+      d.setDate(now.getDate() + 30);
+      return d;
+    })();
 
     const stockData = products.map((p) => {
       const totalQty = p.batches.reduce((s, b) => s + Number(b.qtyRemaining), 0);
@@ -39,9 +43,10 @@ export async function GET(req: NextRequest) {
       const nearestExpiry = p.batches
         .filter((b) => b.expiryDate && Number(b.qtyRemaining) > 0)
         .sort((a, b) => new Date(a.expiryDate!).getTime() - new Date(b.expiryDate!).getTime())[0];
+      const perUnitPrice = Number(p.sellingPrice) / (Number(p.bundleSize) || 1);
       return {
         id: p.id, name: p.name, sku: p.sku, category: p.category.name,
-        sellingPrice: Number(p.sellingPrice),
+        sellingPrice: perUnitPrice,
         totalQty, totalValue, threshold: p.lowStockThreshold,
         isLowStock: totalQty < p.lowStockThreshold,
         nearestExpiry: nearestExpiry?.expiryDate ?? null,

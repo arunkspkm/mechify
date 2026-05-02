@@ -38,14 +38,15 @@ export async function GET() {
     );
     const avgCost = totalStock > 0 ? totalValue / totalStock : 0;
 
+    const bundleSize = Number(p.bundleSize) || 1;
     return {
       "Product Name": p.name,
       SKU: p.sku,
       "HSN Code": p.hsnCode ?? "",
       Category: p.category.name,
       Unit: p.unit.code ?? p.unit.name,
-      MRP: Number(p.mrp),
-      "Selling Price": Number(p.sellingPrice),
+      MRP: Number(p.mrp) / bundleSize,
+      "Selling Price": Number(p.sellingPrice) / bundleSize,
       "Tax Rate": p.taxRate?.name ?? "",
       "Current Stock": Math.round(totalStock * 100) / 100,
       "Avg Landed Cost": Math.round(avgCost * 100) / 100,

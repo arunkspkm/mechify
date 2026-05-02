@@ -29,6 +29,7 @@ interface Enquiry {
 
 const STATUS_COLORS: Record<string, "default" | "secondary" | "destructive"> = {
   ENQUIRY_RECORDED: "secondary",
+  CONFIRMED: "default",
   ORDER_PLACED: "default",
   IN_TRANSIT: "default",
   RECEIVED: "default",
@@ -39,6 +40,7 @@ const STATUS_COLORS: Record<string, "default" | "secondary" | "destructive"> = {
 
 const STATUS_LABELS: Record<string, string> = {
   ENQUIRY_RECORDED: "Enquiry",
+  CONFIRMED: "Confirmed",
   ORDER_PLACED: "Ordered",
   IN_TRANSIT: "In Transit",
   RECEIVED: "Received",

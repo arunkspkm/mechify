@@ -228,7 +228,9 @@ export async function PATCH(
         data: { adjustedAmount: Number(adv.adjustedAmount) + applyAmount },
       });
 
-      // Create a linked payment record on the target invoice
+      // Create a linked payment record on the target invoice (for audit trail)
+      // isAdvanceApplication: true — cash already left drawer when the advance was recorded,
+      // so shift/dashboard cash queries exclude this row.
       await prisma.supplierPayment.create({
         data: {
           purchaseInvoice: { connect: { id } },
@@ -236,6 +238,7 @@ export async function PATCH(
           amount: applyAmount,
           paymentMethod: { connect: { id: adv.paymentMethodId } },
           notes: `Adjusted from advance (${new Date(adv.date).toLocaleDateString("en-IN")}, Rs.${Number(adv.amount).toFixed(0)})`,
+          isAdvanceApplication: true,
         },
       });
 
@@ -275,7 +278,7 @@ export async function PATCH(
           data: { amountPaid: Number(other.amountPaid) - applyAmount },
         });
 
-        // Create a linked payment record on the target invoice
+        // Create a linked payment record on the target invoice (audit-only; no cash outflow)
         if (defaultMethod) {
           await prisma.supplierPayment.create({
             data: {
@@ -284,6 +287,7 @@ export async function PATCH(
               amount: applyAmount,
               paymentMethod: { connect: { id: defaultMethod.id } },
               notes: `Transferred from overpayment on PI-${other.id.slice(-6)}`,
+              isAdvanceApplication: true,
             },
           });
         }
@@ -339,6 +343,61 @@ export async function PATCH(
     });
 
     return NextResponse.json({ message: "Invoice finalized — stock is now available" });
+  }
+
+  // --- Remove item ---
+  if (action === "removeItem") {
+    const itemId = body.itemId as string;
+    if (!itemId) {
+      return NextResponse.json({ error: "Missing itemId" }, { status: 400 });
+    }
+
+    const item = invoice.items.find((i) => i.id === itemId);
+    if (!item) {
+      return NextResponse.json({ error: "Item not found on this invoice" }, { status: 404 });
+    }
+
+    // Only block if batch stock has been sold via billing invoices
+    if (item.batch) {
+      const salesRefs = await prisma.invoiceItem.count({ where: { batchId: item.batch.id } });
+      if (salesRefs > 0) {
+        return NextResponse.json(
+          { error: `Cannot remove — stock from this batch has been sold in ${salesRefs} invoice(s)` },
+          { status: 400 }
+        );
+      }
+
+      // Clean up write-offs referencing this batch (accidental stock, written off before correction)
+      await prisma.stockWriteOff.deleteMany({ where: { batchId: item.batch.id } });
+
+      // Safe to delete the batch
+      await prisma.batch.delete({ where: { id: item.batch.id } });
+    }
+
+    // Delete the purchase invoice item
+    await prisma.purchaseInvoiceItem.delete({ where: { id: itemId } });
+
+    // Recalculate totals and redistribute handling
+    await recalculateInvoice(id);
+
+    return NextResponse.json({ message: "Item removed" });
+  }
+
+  // --- Update handling charge ---
+  if (action === "updateHandlingCharge") {
+    const hc = Number(body.handlingCharge);
+    if (isNaN(hc) || hc < 0) {
+      return NextResponse.json({ error: "Invalid handling charge" }, { status: 400 });
+    }
+
+    await prisma.purchaseInvoice.update({
+      where: { id },
+      data: { handlingCharge: hc },
+    });
+
+    await recalculateInvoice(id);
+
+    return NextResponse.json({ message: "Handling charge updated" });
   }
 
   return NextResponse.json({ error: "Invalid action" }, { status: 400 });

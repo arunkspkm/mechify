@@ -4,7 +4,8 @@ import { auth } from "@/lib/auth";
 import { z } from "zod";
 
 const statusTransitions: Record<string, string[]> = {
-  ENQUIRY_RECORDED: ["ORDER_PLACED", "CANCELLED"],
+  ENQUIRY_RECORDED: ["CONFIRMED", "ORDER_PLACED", "CANCELLED"],
+  CONFIRMED: ["ORDER_PLACED", "CANCELLED"],
   ORDER_PLACED: ["IN_TRANSIT", "CANCELLED"],
   IN_TRANSIT: ["RECEIVED", "CANCELLED"],
   RECEIVED: ["CUSTOMER_NOTIFIED"],
@@ -13,11 +14,16 @@ const statusTransitions: Record<string, string[]> = {
 
 const updateSchema = z.object({
   status: z.enum([
-    "ENQUIRY_RECORDED", "ORDER_PLACED", "IN_TRANSIT",
+    "ENQUIRY_RECORDED", "CONFIRMED", "ORDER_PLACED", "IN_TRANSIT",
     "RECEIVED", "CUSTOMER_NOTIFIED", "DELIVERED", "CANCELLED",
   ]).optional(),
   notes: z.string().optional().nullable(),
   cancelledReason: z.string().optional().nullable(),
+  advanceAmount: z.coerce.number().nonnegative().optional(),
+  advanceMethodId: z.string().optional().nullable(),
+  advanceReference: z.string().optional().nullable(),
+  purchaseOrderId: z.string().optional().nullable(),
+  invoiceId: z.string().optional().nullable(),
 });
 
 // GET /api/enquiries/[id]
@@ -37,6 +43,10 @@ export async function GET(
     include: {
       operator: { select: { name: true } },
       customer: { select: { name: true, phone: true } },
+      notesLog: {
+        orderBy: { createdAt: "desc" },
+        include: { user: { select: { id: true, name: true } } },
+      },
     },
   });
 
@@ -85,12 +95,21 @@ export async function PATCH(
     }
     updateData.status = parsed.data.status;
 
-    // Set timestamps
+    // Set timestamps and status-specific data
+    if (parsed.data.status === "CONFIRMED") {
+      if (parsed.data.advanceAmount != null) updateData.advanceAmount = parsed.data.advanceAmount;
+      if (parsed.data.advanceMethodId) updateData.advanceMethodId = parsed.data.advanceMethodId;
+      if (parsed.data.advanceReference !== undefined) updateData.advanceReference = parsed.data.advanceReference || null;
+    }
+    if (parsed.data.status === "ORDER_PLACED" && parsed.data.purchaseOrderId) {
+      updateData.purchaseOrderId = parsed.data.purchaseOrderId;
+    }
     if (parsed.data.status === "CUSTOMER_NOTIFIED") {
       updateData.notifiedAt = new Date();
     }
     if (parsed.data.status === "DELIVERED") {
       updateData.deliveredAt = new Date();
+      if (parsed.data.invoiceId) updateData.invoiceId = parsed.data.invoiceId;
     }
     if (parsed.data.status === "CANCELLED") {
       updateData.cancelledReason = parsed.data.cancelledReason || null;

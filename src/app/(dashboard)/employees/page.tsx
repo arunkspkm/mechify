@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
@@ -43,6 +43,21 @@ export default function EmployeesPage() {
   const [dailyWage, setDailyWage] = useState("");
   const [onCallRate, setOnCallRate] = useState("");
   const [adding, setAdding] = useState(false);
+
+  // Payroll preview
+  interface PayrollPreview {
+    weekStart: string; weekEnd: string;
+    employees: { id: string; name: string; presentDays: number; halfDays: number; onCallDays: number; earned: number; advances: number; netDue: number; settled: boolean; }[];
+    totals: { totalEarned: number; totalAdvances: number; totalNetDue: number; unsettledCount: number };
+  }
+  const [payroll, setPayroll] = useState<PayrollPreview | null>(null);
+
+  useEffect(() => {
+    fetch("/api/salary/preview")
+      .then((r) => r.ok ? r.json() : null)
+      .then((json) => { if (json?.data) setPayroll(json.data); })
+      .catch(() => {});
+  }, []);
 
   function fetchEmployees() {
     const params = new URLSearchParams();
@@ -110,6 +125,57 @@ export default function EmployeesPage() {
           <p className="text-xs text-gray-500">Weekly Bill (6 days)</p>
         </CardContent></Card>
       </div>
+
+      {/* Payroll Preview */}
+      {payroll && payroll.totals.unsettledCount > 0 && (
+        <Card>
+          <CardHeader className="py-3">
+            <CardTitle className="text-base">This Week&apos;s Payroll ({payroll.weekStart} to {payroll.weekEnd})</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Employee</TableHead>
+                  <TableHead className="text-center">Days</TableHead>
+                  <TableHead className="text-right">Earned</TableHead>
+                  <TableHead className="text-right">Advances</TableHead>
+                  <TableHead className="text-right">Net Due</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {payroll.employees.map((p) => (
+                  <TableRow key={p.id} className={p.settled ? "opacity-50" : ""}>
+                    <TableCell className="font-medium">{p.name}</TableCell>
+                    <TableCell className="text-center text-sm">
+                      {p.presentDays}d{p.halfDays > 0 ? ` + ${p.halfDays}½` : ""}{p.onCallDays > 0 ? ` + ${p.onCallDays}oc` : ""}
+                    </TableCell>
+                    <TableCell className="text-right">Rs.{p.earned.toFixed(0)}</TableCell>
+                    <TableCell className="text-right text-orange-600">{p.advances > 0 ? `- Rs.${p.advances.toFixed(0)}` : "—"}</TableCell>
+                    <TableCell className="text-right font-medium">Rs.{p.netDue.toFixed(0)}</TableCell>
+                    <TableCell>
+                      {p.settled ? (
+                        <Badge variant="secondary">Settled</Badge>
+                      ) : (
+                        <Badge variant="destructive">Pending</Badge>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                <TableRow className="bg-gray-50 font-bold">
+                  <TableCell>Total</TableCell>
+                  <TableCell></TableCell>
+                  <TableCell className="text-right">Rs.{payroll.totals.totalEarned.toFixed(0)}</TableCell>
+                  <TableCell className="text-right text-orange-600">{payroll.totals.totalAdvances > 0 ? `- Rs.${payroll.totals.totalAdvances.toFixed(0)}` : "—"}</TableCell>
+                  <TableCell className="text-right">Rs.{payroll.totals.totalNetDue.toFixed(0)}</TableCell>
+                  <TableCell><Badge>{payroll.totals.unsettledCount} pending</Badge></TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Search + Filter */}
       <div className="flex gap-3 items-center">

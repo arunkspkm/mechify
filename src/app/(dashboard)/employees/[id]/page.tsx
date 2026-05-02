@@ -15,8 +15,9 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { AsyncSelect } from "@/components/shared/async-select";
 import { toast } from "sonner";
-import { ArrowLeft, Save, Plus } from "lucide-react";
+import { ArrowLeft, Save, Plus, Pencil, Trash2 } from "lucide-react";
 
 interface EmployeeDetail {
   id: string;
@@ -63,12 +64,14 @@ interface EmployeeDetail {
     halfDays: number;
     onCallDays: number;
     status: string;
+    paymentMethod?: { id: string; name: string } | null;
   }[];
   advancePayments: {
     id: string;
     amount: string;
     reason: string | null;
     date: string;
+    paymentMethod?: { id: string; name: string } | null;
     deductedInMonth: number | null;
     deductedInYear: number | null;
   }[];
@@ -121,11 +124,17 @@ export default function EmployeeDetailPage({
   const [bankAccountNumber, setBankAccountNumber] = useState("");
   const [bankIfsc, setBankIfsc] = useState("");
 
+  // Payment methods
+  const [paymentMethods, setPaymentMethods] = useState<{ id: string; name: string }[]>([]);
+
   // Advance dialog
   const [showAdvance, setShowAdvance] = useState(false);
   const [advanceAmount, setAdvanceAmount] = useState("");
   const [advanceReason, setAdvanceReason] = useState("");
+  const [advancePayMethodId, setAdvancePayMethodId] = useState("");
+  const [advanceReference, setAdvanceReference] = useState("");
   const [addingAdvance, setAddingAdvance] = useState(false);
+  const [editAdvanceId, setEditAdvanceId] = useState<string | null>(null);
 
   // Settle week dialog
   const [showSettle, setShowSettle] = useState(false);
@@ -147,7 +156,16 @@ export default function EmployeeDetailPage({
   const [payNet, setPayNet] = useState(0);
   const [payAlreadyPaid, setPayAlreadyPaid] = useState(0);
   const [payAmount, setPayAmount] = useState("");
+  const [payMethodId, setPayMethodId] = useState("");
+  const [payReference, setPayReference] = useState("");
   const [paying, setPaying] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/master-data?type=PAYMENT_METHOD")
+      .then((r) => r.ok ? r.json() : { data: [] })
+      .then((json) => setPaymentMethods(json.data ?? []))
+      .catch(() => {});
+  }, []);
 
   function fetchEmployee() {
     fetch(`/api/employees/${id}`)
@@ -203,13 +221,17 @@ export default function EmployeeDetailPage({
   async function handleAddAdvance() {
     if (!advanceAmount || Number(advanceAmount) <= 0) { toast.error("Enter a valid amount"); return; }
     setAddingAdvance(true);
-    const res = await fetch("/api/advances", {
-      method: "POST",
+
+    const isEdit = !!editAdvanceId;
+    const res = await fetch(isEdit ? `/api/advances/${editAdvanceId}` : "/api/advances", {
+      method: isEdit ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        employeeId: id,
+        ...(isEdit ? {} : { employeeId: id }),
         amount: Number(advanceAmount),
         reason: advanceReason || null,
+        paymentMethodId: advancePayMethodId || null,
+        reference: advanceReference || null,
       }),
     });
     setAddingAdvance(false);
@@ -217,9 +239,10 @@ export default function EmployeeDetailPage({
       const err = await res.json().catch(() => ({ error: "Failed" }));
       toast.error(err.error); return;
     }
-    toast.success("Advance recorded");
+    toast.success(isEdit ? "Advance updated" : "Advance recorded");
     setShowAdvance(false);
-    setAdvanceAmount(""); setAdvanceReason("");
+    setEditAdvanceId(null);
+    setAdvanceAmount(""); setAdvanceReason(""); setAdvancePayMethodId(""); setAdvanceReference("");
     fetchEmployee();
   }
 
@@ -315,7 +338,7 @@ export default function EmployeeDetailPage({
     const res = await fetch(`/api/salary/${payRecordId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "pay", amount: amt }),
+      body: JSON.stringify({ action: "pay", amount: amt, paymentMethodId: payMethodId || null, paymentReference: payReference || null }),
     });
     setPaying(false);
     if (!res.ok) {
@@ -446,7 +469,7 @@ export default function EmployeeDetailPage({
         <Button onClick={handleSave} disabled={saving}>
           <Save className="mr-1 h-4 w-4" /> {saving ? "Saving..." : "Save Changes"}
         </Button>
-        <Button variant="outline" onClick={() => setShowAdvance(true)}>
+        <Button variant="outline" onClick={() => { setEditAdvanceId(null); setAdvanceAmount(""); setAdvanceReason(""); setAdvancePayMethodId(""); setAdvanceReference(""); setShowAdvance(true); }}>
           <Plus className="mr-1 h-4 w-4" /> Record Advance
         </Button>
         <Button variant="outline" onClick={openSettleDialog}>
@@ -494,12 +517,29 @@ export default function EmployeeDetailPage({
                       <Badge variant={s.status === "PAID" ? "default" : "secondary"}>{s.status}</Badge>
                     </TableCell>
                     <TableCell>
-                      {s.status !== "PAID" && (
-                        <Button size="sm" variant="outline"
-                          onClick={() => openPayDialog(s.id, Number(s.netPayable), Number(s.paidAmount))}>
-                          Pay
-                        </Button>
-                      )}
+                      <div className="flex items-center gap-1">
+                        {s.status !== "PAID" && Number(s.netPayable) > 0 && (
+                          <Button size="sm" variant="outline"
+                            onClick={() => openPayDialog(s.id, Number(s.netPayable), Number(s.paidAmount))}>
+                            Pay
+                          </Button>
+                        )}
+                        {s.status !== "PAID" && Number(s.netPayable) === 0 && (
+                          <span className="text-xs text-gray-500">Nothing to pay</span>
+                        )}
+                        {Number(s.paidAmount) === 0 && (
+                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-500" title="Reverse settlement"
+                            onClick={async () => {
+                              if (!confirm("Reverse this settlement? Advances will be restored as pending.")) return;
+                              const res = await fetch(`/api/salary/${s.id}`, { method: "DELETE" });
+                              if (!res.ok) { const err = await res.json().catch(() => ({})); toast.error(err.error || "Failed"); return; }
+                              toast.success("Settlement reversed");
+                              fetchEmployee();
+                            }}>
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -519,8 +559,10 @@ export default function EmployeeDetailPage({
                 <TableRow>
                   <TableHead>Date</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
+                  <TableHead>Payment</TableHead>
                   <TableHead>Reason</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead className="w-16"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -530,12 +572,40 @@ export default function EmployeeDetailPage({
                       {new Date(adv.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
                     </TableCell>
                     <TableCell className="text-right font-medium">Rs.{Number(adv.amount).toFixed(0)}</TableCell>
+                    <TableCell className="text-sm">{adv.paymentMethod?.name ?? "—"}</TableCell>
                     <TableCell className="text-sm text-gray-500">{adv.reason ?? "—"}</TableCell>
                     <TableCell>
                       {adv.deductedInMonth ? (
                         <Badge variant="secondary">Deducted</Badge>
                       ) : (
-                        <Badge variant="destructive">Pending</Badge>
+                        <Badge variant="destructive">To Recover</Badge>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {!adv.deductedInMonth && (
+                        <div className="flex gap-1">
+                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" title="Edit"
+                            onClick={() => {
+                              setEditAdvanceId(adv.id);
+                              setAdvanceAmount(String(Number(adv.amount)));
+                              setAdvanceReason(adv.reason ?? "");
+                              setAdvancePayMethodId(adv.paymentMethod?.id ?? "");
+                              setAdvanceReference("");
+                              setShowAdvance(true);
+                            }}>
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-red-500 hover:text-red-700" title="Delete"
+                            onClick={async () => {
+                              if (!confirm(`Delete advance of Rs.${Number(adv.amount).toFixed(0)}?`)) return;
+                              const res = await fetch(`/api/advances/${adv.id}`, { method: "DELETE" });
+                              if (!res.ok) { const err = await res.json().catch(() => ({})); toast.error(err.error || "Failed"); return; }
+                              toast.success("Advance deleted");
+                              fetchEmployee();
+                            }}>
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
                       )}
                     </TableCell>
                   </TableRow>
@@ -549,21 +619,29 @@ export default function EmployeeDetailPage({
       {/* Record Advance Dialog */}
       <Dialog open={showAdvance} onOpenChange={setShowAdvance}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Record Advance — {employee.name}</DialogTitle></DialogHeader>
-          <div className="space-y-4">
+          <DialogHeader><DialogTitle>{editAdvanceId ? "Edit" : "Record"} Advance — {employee.name}</DialogTitle></DialogHeader>
+          <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Amount (Rs.) *</Label>
               <Input type="number" value={advanceAmount} onChange={(e) => setAdvanceAmount(e.target.value)} />
             </div>
             <div className="space-y-2">
+              <Label>Payment Method</Label>
+              <AsyncSelect value={advancePayMethodId} onValueChange={setAdvancePayMethodId} options={paymentMethods} placeholder="Select method" />
+            </div>
+            <div className="space-y-2">
               <Label>Reason</Label>
               <Input value={advanceReason} onChange={(e) => setAdvanceReason(e.target.value)} placeholder="e.g., Medical, Personal" />
+            </div>
+            <div className="space-y-2">
+              <Label>Reference</Label>
+              <Input value={advanceReference} onChange={(e) => setAdvanceReference(e.target.value)} placeholder="Receipt no., UTR, etc." />
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAdvance(false)}>Cancel</Button>
             <Button onClick={handleAddAdvance} disabled={addingAdvance}>
-              {addingAdvance ? "Recording..." : "Record Advance"}
+              {addingAdvance ? "Saving..." : editAdvanceId ? "Update Advance" : "Record Advance"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -699,6 +777,14 @@ export default function EmployeeDetailPage({
               <Label>Amount to Pay Now (Rs.)</Label>
               <Input type="number" value={payAmount} onChange={(e) => setPayAmount(e.target.value)}
                 placeholder={String(payNet - payAlreadyPaid)} />
+            </div>
+            <div className="space-y-2">
+              <Label>Payment Method</Label>
+              <AsyncSelect value={payMethodId} onValueChange={setPayMethodId} options={paymentMethods} placeholder="Select method" />
+            </div>
+            <div className="space-y-2">
+              <Label>Reference</Label>
+              <Input value={payReference} onChange={(e) => setPayReference(e.target.value)} placeholder="UTR, receipt no." />
             </div>
             {Number(payAmount) > (payNet - payAlreadyPaid) && Number(payAmount) > 0 && (
               <p className="text-amber-600 text-xs">

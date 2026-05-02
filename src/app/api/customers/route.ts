@@ -47,12 +47,24 @@ export async function GET(req: NextRequest) {
           vehicleModel: { select: { name: true } },
         },
       },
+      invoices: {
+        where: { isCreditSale: true, outstandingAmount: { gt: 0 }, status: { not: "CANCELLED" } },
+        select: { outstandingAmount: true },
+      },
     },
     orderBy: { name: "asc" },
     take: limit,
   });
 
-  return NextResponse.json({ data: customers });
+  // Compute true outstanding = opening balance + sum of outstanding invoice amounts
+  const data = customers.map((c) => {
+    const invoiceOutstanding = c.invoices.reduce((s, i) => s + Number(i.outstandingAmount), 0);
+    const computed = invoiceOutstanding + Number(c.openingBalance);
+    const { invoices: _invoices, ...rest } = c;
+    return { ...rest, outstandingBalance: computed };
+  });
+
+  return NextResponse.json({ data });
 }
 
 // POST /api/customers — Create customer

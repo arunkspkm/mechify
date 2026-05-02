@@ -31,6 +31,7 @@ interface SupplierDetail {
   paymentTerms: string | null;
   creditPeriodDays: number | null;
   outstandingBalance: string;
+  openingBalance: string;
   active: boolean;
   purchaseInvoices: {
     id: string;
@@ -88,6 +89,16 @@ export default function SupplierDetailPage({
   const [paymentTerms, setPaymentTerms] = useState("");
   const [creditPeriodDays, setCreditPeriodDays] = useState("");
 
+  const [openingBalance, setOpeningBalance] = useState("");
+
+  // Bulk payment dialog
+  const [payOpen, setPayOpen] = useState(false);
+  const [payAmount, setPayAmount] = useState("");
+  const [payMethodId, setPayMethodId] = useState("");
+  const [payReference, setPayReference] = useState("");
+  const [payNotes, setPayNotes] = useState("");
+  const [paying, setPaying] = useState(false);
+
   // Advance dialog
   const [advanceOpen, setAdvanceOpen] = useState(false);
   const [advAmount, setAdvAmount] = useState("");
@@ -117,6 +128,7 @@ export default function SupplierDetailPage({
           setQualityRating(s.qualityRating ?? 3);
           setPaymentTerms(s.paymentTerms ?? "");
           setCreditPeriodDays(s.creditPeriodDays ? String(s.creditPeriodDays) : "");
+          setOpeningBalance(String(Number(s.openingBalance) || 0));
         }
         setLoading(false);
       })
@@ -140,6 +152,7 @@ export default function SupplierDetailPage({
         qualityRating,
         paymentTerms: paymentTerms || null,
         creditPeriodDays: creditPeriodDays ? Number(creditPeriodDays) : null,
+        openingBalance: Number(openingBalance) || 0,
       }),
     });
     setSaving(false);
@@ -227,6 +240,11 @@ export default function SupplierDetailPage({
             <Label>Credit Period (days)</Label>
             <Input type="number" value={creditPeriodDays} onChange={(e) => setCreditPeriodDays(e.target.value)} placeholder="e.g., 30" />
           </div>
+          <div className="space-y-2">
+            <Label>Opening Balance (Rs.)</Label>
+            <Input type="number" min="0" value={openingBalance} onChange={(e) => setOpeningBalance(e.target.value)} placeholder="Legacy amount owed from before Mechify" />
+            <p className="text-xs text-gray-500">Pre-existing amount owed from before using Mechify</p>
+          </div>
         </CardContent>
       </Card>
 
@@ -234,6 +252,11 @@ export default function SupplierDetailPage({
         <Button onClick={handleSave} disabled={saving}>
           <Save className="mr-1 h-4 w-4" /> {saving ? "Saving..." : "Save Changes"}
         </Button>
+        {Number(supplier.outstandingBalance) > 0 && (
+          <Button onClick={() => { setPayAmount(String(Number(supplier.outstandingBalance).toFixed(0))); setPayMethodId(""); setPayReference(""); setPayNotes(""); setPayOpen(true); }}>
+            Make Payment
+          </Button>
+        )}
         <Button variant="outline" onClick={() => setAdvanceOpen(true)}>
           <Plus className="mr-1 h-4 w-4" /> Pay Advance
         </Button>
@@ -357,6 +380,70 @@ export default function SupplierDetailPage({
           </CardContent>
         </Card>
       )}
+
+      {/* Bulk Payment Dialog */}
+      <Dialog open={payOpen} onOpenChange={setPayOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Make Payment — {supplier.name}</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-gray-600">
+              Total outstanding: <span className="font-bold text-red-600">Rs.{Number(supplier.outstandingBalance).toFixed(0)}</span>
+              {Number(supplier.openingBalance) > 0 && <span className="text-xs text-gray-500 ml-1">(incl. Rs.{Number(supplier.openingBalance).toFixed(0)} opening balance)</span>}
+            </p>
+            <p className="text-xs text-gray-500">Payment will be auto-distributed: opening balance first, then oldest invoices.</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>Amount (Rs.) *</Label>
+                <Input type="number" min="0" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>Payment Method *</Label>
+                <AsyncSelect value={payMethodId} onValueChange={setPayMethodId} options={paymentMethods} placeholder="Select method" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>Reference</Label>
+                <Input value={payReference} onChange={(e) => setPayReference(e.target.value)} placeholder="UTR, cheque no." />
+              </div>
+              <div className="space-y-2">
+                <Label>Notes</Label>
+                <Input value={payNotes} onChange={(e) => setPayNotes(e.target.value)} />
+              </div>
+            </div>
+            {Number(payAmount) > Number(supplier.outstandingBalance) && Number(payAmount) > 0 && (
+              <p className="text-xs text-amber-600">Rs.{(Number(payAmount) - Number(supplier.outstandingBalance)).toFixed(0)} excess will be recorded as supplier advance</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPayOpen(false)}>Cancel</Button>
+            <Button onClick={async () => {
+              if (!payAmount || Number(payAmount) <= 0) { toast.error("Enter amount"); return; }
+              if (!payMethodId) { toast.error("Select payment method"); return; }
+              setPaying(true);
+              const res = await fetch(`/api/suppliers/${id}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ amount: Number(payAmount), paymentMethodId: payMethodId, reference: payReference || null, notes: payNotes || null }),
+              });
+              setPaying(false);
+              if (!res.ok) { const err = await res.json().catch(() => ({})); toast.error(err.error || "Failed"); return; }
+              const json = await res.json();
+              const dist = json.data.distributions;
+              const summary = dist.map((d: { type: string; invoiceNumber?: string; amount: number }) =>
+                d.type === "opening_balance" ? `Opening: Rs.${d.amount.toFixed(0)}` :
+                d.type === "invoice" ? `${d.invoiceNumber}: Rs.${d.amount.toFixed(0)}` :
+                `Advance: Rs.${d.amount.toFixed(0)}`
+              ).join(", ");
+              toast.success(`Payment distributed: ${summary}`);
+              setPayOpen(false);
+              fetchSupplier();
+            }} disabled={paying || !payAmount || !payMethodId}>
+              {paying ? "Processing..." : `Pay Rs.${Number(payAmount || 0).toFixed(0)}`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Pay Advance Dialog */}
       <Dialog open={advanceOpen} onOpenChange={setAdvanceOpen}>

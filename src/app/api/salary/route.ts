@@ -120,13 +120,67 @@ export async function POST(req: NextRequest) {
     const baseSalary = Math.round(dailyWage * (presentDays + halfDays * 0.5));
     const onCallAmount = Math.round(onCallDays * (onCallRate || dailyWage));
 
-    // Get undeducted advances
+    // Get undeducted advances (oldest first)
     const advances = await prisma.advancePayment.findMany({
       where: { employeeId, deductedInMonth: null },
+      orderBy: { date: "asc" },
     });
-    const totalAdvances = advances.reduce((s, a) => s + Number(a.amount), 0);
 
-    const netPayable = Math.max(0, Math.round(baseSalary + onCallAmount + bonus - totalAdvances - deductions));
+    // Recoverable this week = earnings + bonus - other deductions (bounded)
+    const earnings = baseSalary + onCallAmount + bonus - deductions;
+    const recoverable = Math.max(0, earnings);
+
+    // Apply advances up to recoverable amount; split the last one if partially consumed
+    const month = periodEnd.getMonth() + 1;
+    const year = periodEnd.getFullYear();
+    let remainingToDeduct = recoverable;
+    let actualAdvancesDeducted = 0;
+    const consumedAdvanceIds: string[] = [];
+
+    for (const adv of advances) {
+      if (remainingToDeduct <= 0) break;
+      const advAmount = Number(adv.amount);
+      if (advAmount <= remainingToDeduct) {
+        // Fully deduct this advance
+        await prisma.advancePayment.update({
+          where: { id: adv.id },
+          data: { deductedInMonth: month, deductedInYear: year },
+        });
+        consumedAdvanceIds.push(adv.id);
+        actualAdvancesDeducted += advAmount;
+        remainingToDeduct -= advAmount;
+      } else {
+        // Partial deduction: split into two records
+        const deductedPart = remainingToDeduct;
+        const remainingPart = advAmount - deductedPart;
+        const origDateStr = new Date(adv.date).toISOString().slice(0, 10);
+        // Mark original as the deducted portion
+        await prisma.advancePayment.update({
+          where: { id: adv.id },
+          data: { amount: deductedPart, deductedInMonth: month, deductedInYear: year },
+        });
+        consumedAdvanceIds.push(adv.id);
+        // Create a new advance for the remaining portion (carries forward to next week)
+        const carryReason = `Carry-forward Rs.${remainingPart} from Rs.${advAmount} advance on ${origDateStr}${adv.reason ? ` — ${adv.reason}` : ""}`;
+        await prisma.advancePayment.create({
+          data: {
+            employee: { connect: { id: employeeId } },
+            amount: remainingPart,
+            reason: carryReason,
+            date: adv.date,
+            paymentMethod: adv.paymentMethodId ? { connect: { id: adv.paymentMethodId } } : undefined,
+            reference: adv.reference,
+          },
+        });
+        actualAdvancesDeducted += deductedPart;
+        remainingToDeduct = 0;
+      }
+    }
+
+    const netPayable = Math.max(0, Math.round(earnings - actualAdvancesDeducted));
+
+    // If netPayable is 0 (fully offset by advance), mark as PAID immediately — no cash changes hands
+    const status = netPayable === 0 ? "PAID" : "PENDING";
 
     const record = await prisma.salaryRecord.create({
       data: {
@@ -140,21 +194,21 @@ export async function POST(req: NextRequest) {
         onCallDays,
         onCallAmount,
         baseSalary,
-        totalAdvances,
+        totalAdvances: actualAdvancesDeducted,
         bonus,
         deductions,
         netPayable,
+        status,
+        paidDate: netPayable === 0 ? new Date() : null,
         notes: notes ?? null,
       },
     });
 
-    // Mark advances as deducted (store period info in the month/year fields)
-    const month = periodEnd.getMonth() + 1;
-    const year = periodEnd.getFullYear();
-    for (const adv of advances) {
-      await prisma.advancePayment.update({
-        where: { id: adv.id },
-        data: { deductedInMonth: month, deductedInYear: year },
+    // Stamp the settlement ID on the advances we just consumed, so reverse can find them precisely
+    if (consumedAdvanceIds.length > 0) {
+      await prisma.advancePayment.updateMany({
+        where: { id: { in: consumedAdvanceIds } },
+        data: { deductedInSalaryRecordId: record.id },
       });
     }
 

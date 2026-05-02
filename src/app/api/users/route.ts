@@ -93,6 +93,42 @@ export async function POST(req: NextRequest) {
   }
 }
 
+// DELETE /api/users — Delete user (Owner only)
+export async function DELETE(req: NextRequest) {
+  const session = await auth();
+  if (!session || session.user.role !== "OWNER") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const { searchParams } = new URL(req.url);
+  const id = searchParams.get("id");
+  if (!id) {
+    return NextResponse.json({ error: "Missing user id" }, { status: 400 });
+  }
+
+  if (id === session.user.id) {
+    return NextResponse.json({ error: "Cannot delete your own account" }, { status: 400 });
+  }
+
+  try {
+    await prisma.user.delete({ where: { id } });
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    console.error("User delete error:", err);
+    const message = err instanceof Error ? err.message : "";
+    if (message.includes("Record to delete does not exist")) {
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
+    if (message.includes("Foreign key constraint") || message.includes("foreign key")) {
+      return NextResponse.json(
+        { error: "Cannot delete — this user has associated records (invoices, write-offs, etc.). Deactivate them instead." },
+        { status: 409 }
+      );
+    }
+    return NextResponse.json({ error: "Failed to delete user" }, { status: 500 });
+  }
+}
+
 // PATCH /api/users — Update user (Owner only)
 export async function PATCH(req: NextRequest) {
   const session = await auth();

@@ -35,6 +35,12 @@ export async function GET(req: NextRequest) {
     include: {
       supplier: { select: { name: true } },
       _count: { select: { items: true } },
+      items: {
+        include: {
+          product: { select: { id: true, name: true, sku: true } },
+          batch: { select: { id: true, batchNumber: true } },
+        },
+      },
     },
     orderBy: { createdAt: "desc" },
   });

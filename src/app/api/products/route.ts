@@ -16,6 +16,7 @@ export async function GET(req: NextRequest) {
   const categoryId = searchParams.get("category");
   const brandId = searchParams.get("brand");
   const active = searchParams.get("active") !== "false";
+  const inStock = searchParams.get("inStock") === "true";
   const page = parseInt(searchParams.get("page") ?? "1", 10);
   const limit = parseInt(searchParams.get("limit") ?? "20", 10);
 
@@ -24,6 +25,15 @@ export async function GET(req: NextRequest) {
   if (active) where.active = true;
   if (categoryId) where.categoryId = categoryId;
   if (brandId) where.brandId = brandId;
+  if (inStock) {
+    where.batches = {
+      some: {
+        active: true,
+        qtyRemaining: { gt: 0 },
+        OR: [{ expiryDate: null }, { expiryDate: { gt: new Date() } }],
+      },
+    };
+  }
   if (search) {
     where.OR = [
       { name: { contains: search, mode: "insensitive" } },
@@ -41,6 +51,12 @@ export async function GET(req: NextRequest) {
         unit: { select: { id: true, name: true, code: true } },
         taxRate: { select: { id: true, name: true, metadata: true } },
         images: { where: { isPrimary: true }, take: 1 },
+        batches: {
+          where: { supplierId: { not: null } },
+          orderBy: { purchaseDate: "desc" },
+          take: 1,
+          select: { supplier: { select: { name: true } } },
+        },
         _count: { select: { batches: true } },
       },
       orderBy: { name: "asc" },

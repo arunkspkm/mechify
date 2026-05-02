@@ -50,6 +50,10 @@ interface ShiftDetail {
   summary: {
     totalSales: number;
     totalRefunds: number;
+    totalCashAdvances: number;
+    totalCashExpenses: number;
+    totalCashCollections: number;
+    totalSupplierPayments: number;
     returnCount: number;
     invoiceCount: number;
     totalItems: number;
@@ -209,6 +213,30 @@ export default function ShiftDetailPage({
                 <div className="flex justify-between text-red-600">
                   <span>Return Refunds ({s.returnCount}):</span>
                   <span>− Rs.{s.totalRefunds.toFixed(0)}</span>
+                </div>
+              )}
+              {s.totalCashAdvances > 0 && (
+                <div className="flex justify-between text-orange-600">
+                  <span>Cash Advances Paid:</span>
+                  <span>− Rs.{s.totalCashAdvances.toFixed(0)}</span>
+                </div>
+              )}
+              {s.totalCashExpenses > 0 && (
+                <div className="flex justify-between text-orange-600">
+                  <span>Cash Expenses:</span>
+                  <span>− Rs.{s.totalCashExpenses.toFixed(0)}</span>
+                </div>
+              )}
+              {s.totalCashCollections > 0 && (
+                <div className="flex justify-between text-green-600">
+                  <span>Customer Cash Collections:</span>
+                  <span>+ Rs.{s.totalCashCollections.toFixed(0)}</span>
+                </div>
+              )}
+              {s.totalSupplierPayments > 0 && (
+                <div className="flex justify-between text-orange-600">
+                  <span>Supplier Cash Payments:</span>
+                  <span>− Rs.{s.totalSupplierPayments.toFixed(0)}</span>
                 </div>
               )}
               <div className="flex justify-between font-bold">

@@ -163,7 +163,49 @@ export async function PATCH(req: NextRequest) {
   });
   const totalRefunds = approvedReturns.reduce((s, r) => s + Number(r.totalRefund), 0);
 
-  const expectedCash = Number(shift.openingBalance) + (paymentTotals["Cash"] ?? 0) - totalRefunds;
+  // Deduct cash advances given during this shift
+  const cashAdvances = await prisma.advancePayment.findMany({
+    where: {
+      createdAt: { gte: shift.startTime },
+      paymentMethod: { name: "Cash" },
+    },
+    select: { amount: true },
+  });
+  const totalCashAdvances = cashAdvances.reduce((s, a) => s + Number(a.amount), 0);
+
+  // Deduct cash expenses recorded during this shift (cash physically left the drawer at createdAt time)
+  const cashExpenses = await prisma.expense.findMany({
+    where: {
+      createdAt: { gte: shift.startTime },
+      paymentMethod: { name: "Cash" },
+    },
+    select: { amount: true },
+  });
+  const totalCashExpenses = cashExpenses.reduce((s, e) => s + Number(e.amount), 0);
+
+  // Add cash received from customer credit payments during this shift
+  const customerCashPayments = await prisma.customerPayment.findMany({
+    where: {
+      date: { gte: shift.startTime },
+      paymentMethod: { name: "Cash" },
+    },
+    select: { amount: true },
+  });
+  const totalCashCollections = customerCashPayments.reduce((s, p) => s + Number(p.amount), 0);
+
+  // Deduct cash paid to suppliers during this shift
+  // Exclude isAdvanceApplication rows — those are audit entries; the cash already left the drawer when the advance was originally recorded.
+  const supplierCashPayments = await prisma.supplierPayment.findMany({
+    where: {
+      createdAt: { gte: shift.startTime },
+      paymentMethod: { name: "Cash" },
+      isAdvanceApplication: false,
+    },
+    select: { amount: true },
+  });
+  const totalSupplierPayments = supplierCashPayments.reduce((s, p) => s + Number(p.amount), 0);
+
+  const expectedCash = Number(shift.openingBalance) + (paymentTotals["Cash"] ?? 0) + totalCashCollections - totalRefunds - totalCashAdvances - totalCashExpenses - totalSupplierPayments;
   const variance = actualCash - expectedCash;
 
   // Require reason if there's a variance
@@ -206,6 +248,10 @@ export async function PATCH(req: NextRequest) {
       summary: {
         totalSales,
         totalRefunds,
+        totalCashAdvances,
+        totalCashCollections,
+        totalCashExpenses,
+        totalSupplierPayments,
         returnCount: approvedReturns.length,
         invoiceCount: shift.invoices.length,
         paymentTotals,

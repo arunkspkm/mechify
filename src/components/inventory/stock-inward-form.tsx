@@ -141,7 +141,7 @@ export function StockInwardForm() {
       return;
     }
     const timer = setTimeout(async () => {
-      const res = await fetch(`/api/products/search?q=${encodeURIComponent(productSearch)}&limit=10`);
+      const res = await fetch(`/api/products/search?q=${encodeURIComponent(productSearch)}&limit=25`);
       const json = await res.json();
       setSearchResults(json.data ?? []);
     }, 300);
@@ -396,6 +396,11 @@ export function StockInwardForm() {
                   <Plus className="h-4 w-4 text-gray-400" />
                 </button>
               ))}
+              {searchResults.length === 25 && (
+                <div className="px-3 py-2 text-xs text-muted-foreground">
+                  Showing first 25 — keep typing to refine.
+                </div>
+              )}
             </div>
           )}
 

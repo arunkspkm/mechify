@@ -27,6 +27,7 @@ interface Config {
   defaultDiscountMax: string;
   expiryAlertDays: number;
   defaultCreditLimit: string;
+  overridePin: string;
 }
 
 export default function SettingsPage() {
@@ -66,6 +67,7 @@ export default function SettingsPage() {
         defaultDiscountMax: Number(config.defaultDiscountMax),
         expiryAlertDays: config.expiryAlertDays,
         defaultCreditLimit: Number(config.defaultCreditLimit),
+        overridePin: config.overridePin || null,
       }),
     });
 
@@ -211,6 +213,11 @@ export default function SettingsPage() {
             <Label>Max Discount % (default)</Label>
             <Input type="number" min="0" max="100" value={config.defaultDiscountMax} onChange={(e) => update("defaultDiscountMax", e.target.value)} />
             <p className="text-xs text-gray-500">Counter operators can&apos;t exceed this without owner approval</p>
+          </div>
+          <div className="space-y-2">
+            <Label>Owner Override PIN</Label>
+            <Input type="password" inputMode="numeric" maxLength={6} value={config.overridePin} onChange={(e) => update("overridePin", e.target.value.replace(/\D/g, ""))} placeholder="4-6 digit PIN" />
+            <p className="text-xs text-gray-500">Operators enter this to approve discounts beyond their limit</p>
           </div>
           <div className="space-y-2">
             <Label>Expiry Alert Days</Label>

@@ -14,14 +14,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Plus, Search, Upload, Pencil, Package } from "lucide-react";
+import { AsyncSelect } from "@/components/shared/async-select";
+import { Plus, Search, Upload, Pencil, Package, X } from "lucide-react";
 
 interface Product {
   id: string;
@@ -29,11 +23,13 @@ interface Product {
   name: string;
   mrp: string;
   sellingPrice: string;
+  bundleSize: string;
   active: boolean;
   category: { id: string; name: string };
   brand: { id: string; name: string } | null;
   unit: { id: string; name: string; code: string | null };
   images: { url: string }[];
+  batches: { supplier: { name: string } | null }[];
   _count: { batches: number };
 }
 
@@ -47,6 +43,7 @@ export default function ProductsPage() {
   const [categories, setCategories] = useState<MasterDataOption[]>([]);
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [inStockOnly, setInStockOnly] = useState(false);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
@@ -56,13 +53,14 @@ export default function ProductsPage() {
     const params = new URLSearchParams({ page: String(page), limit: "20" });
     if (search) params.set("search", search);
     if (categoryFilter && categoryFilter !== "all") params.set("category", categoryFilter);
+    if (inStockOnly) params.set("inStock", "true");
 
     const res = await fetch(`/api/products?${params}`);
     const json = await res.json();
     setProducts(json.data ?? []);
     setTotalPages(json.pagination?.totalPages ?? 1);
     setLoading(false);
-  }, [page, search, categoryFilter]);
+  }, [page, search, categoryFilter, inStockOnly]);
 
   useEffect(() => {
     fetchProducts();
@@ -77,7 +75,7 @@ export default function ProductsPage() {
   // Reset page when filters change
   useEffect(() => {
     setPage(1);
-  }, [search, categoryFilter]);
+  }, [search, categoryFilter, inStockOnly]);
 
   return (
     <div className="space-y-6">
@@ -113,17 +111,28 @@ export default function ProductsPage() {
             className="pl-10"
           />
         </div>
-        <Select value={categoryFilter} onValueChange={(v) => setCategoryFilter(v ?? "")}>
-          <SelectTrigger className="w-48">
-            <SelectValue placeholder="All categories" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All categories</SelectItem>
-            {categories.map((c) => (
-              <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="w-48">
+          <AsyncSelect
+            value={categoryFilter === "all" ? "" : categoryFilter}
+            onValueChange={(v) => setCategoryFilter(v || "all")}
+            options={categories}
+            placeholder="All categories"
+            allowClear
+          />
+        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={inStockOnly}
+            onChange={(e) => setInStockOnly(e.target.checked)}
+          />
+          In stock only
+        </label>
+        {(search || categoryFilter !== "all" || inStockOnly) && (
+          <Button variant="ghost" size="sm" onClick={() => { setSearch(""); setCategoryFilter("all"); setInStockOnly(false); }}>
+            <X className="mr-1 h-4 w-4" /> Clear filters
+          </Button>
+        )}
       </div>
 
       {/* Table */}
@@ -136,6 +145,7 @@ export default function ProductsPage() {
               <TableHead>SKU</TableHead>
               <TableHead>Category</TableHead>
               <TableHead>Brand</TableHead>
+              <TableHead>Supplier</TableHead>
               <TableHead className="text-right">MRP</TableHead>
               <TableHead className="text-right">Selling Price</TableHead>
               <TableHead>Status</TableHead>
@@ -145,13 +155,13 @@ export default function ProductsPage() {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center py-8 text-gray-500">
+                <TableCell colSpan={10} className="text-center py-8 text-gray-500">
                   Loading...
                 </TableCell>
               </TableRow>
             ) : products.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center py-8 text-gray-500">
+                <TableCell colSpan={10} className="text-center py-8 text-gray-500">
                   <Package className="mx-auto h-8 w-8 mb-2 text-gray-300" />
                   No products found.{" "}
                   <Link href="/products/new" className="text-blue-600 hover:underline">
@@ -181,11 +191,20 @@ export default function ProductsPage() {
                   <TableCell className="text-gray-500">{product.sku}</TableCell>
                   <TableCell>{product.category?.name}</TableCell>
                   <TableCell>{product.brand?.name ?? "—"}</TableCell>
+                  <TableCell className="text-sm text-gray-500">{product.batches?.[0]?.supplier?.name ?? "—"}</TableCell>
                   <TableCell className="text-right">
-                    Rs.{Number(product.mrp).toFixed(2)}
+                    {(() => {
+                      const bs = Number(product.bundleSize) || 1;
+                      const mrp = Number(product.mrp) / bs;
+                      return <>Rs.{mrp.toFixed(2)}{bs > 1 && <span className="text-xs text-gray-400 block">/{product.unit?.code ?? "pc"}</span>}</>;
+                    })()}
                   </TableCell>
                   <TableCell className="text-right">
-                    Rs.{Number(product.sellingPrice).toFixed(2)}
+                    {(() => {
+                      const bs = Number(product.bundleSize) || 1;
+                      const sp = Number(product.sellingPrice) / bs;
+                      return <>Rs.{sp.toFixed(2)}{bs > 1 && <span className="text-xs text-gray-400 block">/{product.unit?.code ?? "pc"}</span>}</>;
+                    })()}
                   </TableCell>
                   <TableCell>
                     <Badge variant={product.active ? "default" : "secondary"}>

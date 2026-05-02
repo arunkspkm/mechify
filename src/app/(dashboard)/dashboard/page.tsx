@@ -46,7 +46,21 @@ interface DashboardData {
     daysLeft: number;
     isOverdue: boolean;
   }[];
+  cashPosition?: {
+    hasOpenShift: boolean;
+    shiftId: string | null;
+    operatorName: string | null;
+    openingBalance: number;
+    cashSales: number;
+    cashCollections: number;
+    cashRefunds: number;
+    cashAdvances: number;
+    cashExpenses: number;
+    cashSupplierPayments: number;
+    expectedCash: number;
+  };
   businessHealth?: {
+    totalCOGS: number;
     revenueGrowth: number;
     lastMonthRevenue: number;
     avgBillValue: number;
@@ -85,7 +99,8 @@ export default function DashboardPage() {
   if (loading) return <p className="text-gray-500">Loading dashboard...</p>;
   if (!data) return <p className="text-red-600">Failed to load dashboard</p>;
 
-  const monthProfit = data.monthSales - data.monthExpenses;
+  const monthCOGS = data.businessHealth?.totalCOGS ?? 0;
+  const monthProfit = data.monthSales - monthCOGS - data.monthExpenses;
 
   return (
     <div className="space-y-6">
@@ -145,7 +160,7 @@ export default function DashboardPage() {
                 <p className={`text-2xl font-bold ${monthProfit >= 0 ? "" : "text-red-600"}`}>
                   Rs.{monthProfit.toFixed(0)}
                 </p>
-                <p className="text-xs text-gray-500">Month Profit (Sales − Expenses)</p>
+                <p className="text-xs text-gray-500">Month Profit (Sales − COGS − Expenses)</p>
               </div>
             </div>
           </CardContent>
@@ -321,6 +336,64 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Cash Position */}
+      {data.cashPosition?.hasOpenShift && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <IndianRupee className="h-4 w-4 text-green-600" /> Cash Position
+              <span className="text-xs text-gray-500 font-normal ml-2">(Shift by {data.cashPosition.operatorName})</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-1 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-600">Opening Balance:</span>
+                <span>Rs.{data.cashPosition.openingBalance.toFixed(0)}</span>
+              </div>
+              <div className="flex justify-between text-green-600">
+                <span>+ Cash Sales:</span>
+                <span>Rs.{data.cashPosition.cashSales.toFixed(0)}</span>
+              </div>
+              {data.cashPosition.cashCollections > 0 && (
+                <div className="flex justify-between text-green-600">
+                  <span>+ Customer Collections:</span>
+                  <span>Rs.{data.cashPosition.cashCollections.toFixed(0)}</span>
+                </div>
+              )}
+              {data.cashPosition.cashRefunds > 0 && (
+                <div className="flex justify-between text-red-600">
+                  <span>− Refunds:</span>
+                  <span>Rs.{data.cashPosition.cashRefunds.toFixed(0)}</span>
+                </div>
+              )}
+              {data.cashPosition.cashAdvances > 0 && (
+                <div className="flex justify-between text-orange-600">
+                  <span>− Advances:</span>
+                  <span>Rs.{data.cashPosition.cashAdvances.toFixed(0)}</span>
+                </div>
+              )}
+              {data.cashPosition.cashExpenses > 0 && (
+                <div className="flex justify-between text-orange-600">
+                  <span>− Expenses:</span>
+                  <span>Rs.{data.cashPosition.cashExpenses.toFixed(0)}</span>
+                </div>
+              )}
+              {data.cashPosition.cashSupplierPayments > 0 && (
+                <div className="flex justify-between text-orange-600">
+                  <span>− Supplier Payments:</span>
+                  <span>Rs.{data.cashPosition.cashSupplierPayments.toFixed(0)}</span>
+                </div>
+              )}
+              <div className="flex justify-between font-bold border-t pt-1 mt-1">
+                <span>Expected Cash in Drawer:</span>
+                <span className="text-green-700">Rs.{data.cashPosition.expectedCash.toFixed(0)}</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Supplier Payments Due */}
       {data.supplierDueList && data.supplierDueList.length > 0 && (

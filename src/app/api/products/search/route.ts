@@ -14,21 +14,33 @@ export async function GET(req: NextRequest) {
 
   const { searchParams } = new URL(req.url);
   const q = searchParams.get("q") ?? "";
-  const limit = parseInt(searchParams.get("limit") ?? "20", 10);
+  const limit = parseInt(searchParams.get("limit") ?? "30", 10);
+  const inStockOnly = searchParams.get("inStockOnly") === "true";
 
   if (q.length < 1) {
     return NextResponse.json({ data: [] });
   }
 
+  const where: Record<string, unknown> = {
+    active: true,
+    OR: [
+      { name: { contains: q, mode: "insensitive" } },
+      { sku: { contains: q, mode: "insensitive" } },
+      { barcode: q }, // Exact match for barcode
+    ],
+  };
+  if (inStockOnly) {
+    where.batches = {
+      some: {
+        active: true,
+        qtyRemaining: { gt: 0 },
+        OR: [{ expiryDate: null }, { expiryDate: { gt: new Date() } }],
+      },
+    };
+  }
+
   const products = await prisma.product.findMany({
-    where: {
-      active: true,
-      OR: [
-        { name: { contains: q, mode: "insensitive" } },
-        { sku: { contains: q, mode: "insensitive" } },
-        { barcode: q }, // Exact match for barcode
-      ],
-    },
+    where,
     select: {
       id: true,
       name: true,

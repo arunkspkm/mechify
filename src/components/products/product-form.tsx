@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AsyncSelect } from "@/components/shared/async-select";
 import { CompanionItemsPicker } from "./companion-items-picker";
 import { ProductImageUpload } from "./product-image-upload";
@@ -40,7 +42,31 @@ interface ProductFormProps {
 
 export function ProductForm({ productId, initialData }: ProductFormProps) {
   const router = useRouter();
+  const { data: session } = useSession();
   const isEditing = !!productId;
+  const isOwner = session?.user?.role === "OWNER";
+
+  // Discontinue state
+  const [discontinueOpen, setDiscontinueOpen] = useState(false);
+  const [writeOffStock, setWriteOffStock] = useState(false);
+  const [discontinuing, setDiscontinuing] = useState(false);
+
+  async function handleDiscontinue() {
+    setDiscontinuing(true);
+    const res = await fetch(`/api/products/${productId}/discontinue`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ writeOffStock, reason: "Product discontinued" }),
+    });
+    setDiscontinuing(false);
+    if (!res.ok) {
+      const err = await res.json();
+      toast.error(err.error || "Failed to discontinue product");
+      return;
+    }
+    toast.success("Product discontinued");
+    router.push("/products");
+  }
 
   // Master data options
   const [categories, setCategories] = useState<MasterDataOption[]>([]);
@@ -397,6 +423,51 @@ export function ProductForm({ productId, initialData }: ProductFormProps) {
           Cancel
         </Button>
       </div>
+
+      {/* Danger zone — only for existing products, Owner only */}
+      {isEditing && isOwner && (
+        <Card className="border-red-200">
+          <CardHeader>
+            <CardTitle className="text-red-600 text-base">Danger Zone</CardTitle>
+          </CardHeader>
+          <CardContent className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">Discontinue this product</p>
+              <p className="text-xs text-gray-500">Marks the product inactive. Optionally writes off remaining stock.</p>
+            </div>
+            <Button type="button" variant="destructive" size="sm" onClick={() => setDiscontinueOpen(true)}>
+              Discontinue
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Discontinue confirmation dialog */}
+      <Dialog open={discontinueOpen} onOpenChange={setDiscontinueOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Discontinue Product</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-gray-600">This product will be marked inactive and hidden from billing. This cannot be undone.</p>
+            <div className="flex items-center gap-3">
+              <Switch checked={writeOffStock} onCheckedChange={setWriteOffStock} id="writeoff-switch" />
+              <Label htmlFor="writeoff-switch">Also write off all remaining stock</Label>
+            </div>
+            {writeOffStock && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+                All remaining stock batches will be written off as &quot;Discontinued&quot;.
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDiscontinueOpen(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDiscontinue} disabled={discontinuing}>
+              {discontinuing ? "Discontinuing..." : "Confirm Discontinue"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </form>
   );
 }

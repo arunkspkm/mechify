@@ -15,7 +15,7 @@ import {
 import { AsyncSelect } from "@/components/shared/async-select";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, Pencil } from "lucide-react";
 
 interface Expense {
   id: string;
@@ -24,8 +24,8 @@ interface Expense {
   amount: string;
   reference: string | null;
   notes: string | null;
-  category: { name: string };
-  paymentMethod: { name: string };
+  category: { id: string; name: string };
+  paymentMethod: { id: string; name: string };
 }
 
 interface SelectOption {
@@ -57,6 +57,7 @@ export default function ExpensesPage() {
   const [reference, setReference] = useState("");
   const [notes, setNotes] = useState("");
   const [adding, setAdding] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
 
   function fetchExpenses() {
     const params = new URLSearchParams();
@@ -91,8 +92,9 @@ export default function ExpensesPage() {
       return;
     }
     setAdding(true);
-    const res = await fetch("/api/expenses", {
-      method: "POST",
+    const isEdit = !!editId;
+    const res = await fetch(isEdit ? `/api/expenses/${editId}` : "/api/expenses", {
+      method: isEdit ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         date, categoryId, description,
@@ -104,8 +106,9 @@ export default function ExpensesPage() {
     });
     setAdding(false);
     if (!res.ok) { const err = await res.json(); toast.error(err.error); return; }
-    toast.success("Expense recorded");
+    toast.success(isEdit ? "Expense updated" : "Expense recorded");
     setShowAdd(false);
+    setEditId(null);
     setDescription(""); setAmount(""); setReference(""); setNotes("");
     fetchExpenses();
   }
@@ -128,7 +131,7 @@ export default function ExpensesPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Expenses</h1>
-        <Button onClick={() => setShowAdd(true)}>
+        <Button onClick={() => { setEditId(null); setDate(new Date().toISOString().split("T")[0]); setCategoryId(""); setDescription(""); setAmount(""); setPaymentMethodId(""); setReference(""); setNotes(""); setShowAdd(true); }}>
           <Plus className="mr-1 h-4 w-4" /> Record Expense
         </Button>
       </div>
@@ -204,9 +207,24 @@ export default function ExpensesPage() {
                       <TableCell className="text-sm">{exp.paymentMethod.name}</TableCell>
                       <TableCell className="text-sm text-gray-500">{exp.reference ?? "—"}</TableCell>
                       <TableCell>
-                        <Button variant="ghost" size="icon" onClick={() => handleDelete(exp.id)}>
-                          <Trash2 className="h-4 w-4 text-red-500" />
-                        </Button>
+                        <div className="flex gap-1">
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => {
+                            setEditId(exp.id);
+                            setDate(new Date(exp.date).toISOString().split("T")[0]);
+                            setCategoryId(exp.category.id);
+                            setDescription(exp.description);
+                            setAmount(String(Number(exp.amount)));
+                            setPaymentMethodId(exp.paymentMethod.id);
+                            setReference(exp.reference ?? "");
+                            setNotes(exp.notes ?? "");
+                            setShowAdd(true);
+                          }}>
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleDelete(exp.id)}>
+                            <Trash2 className="h-4 w-4 text-red-500" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))
@@ -220,7 +238,7 @@ export default function ExpensesPage() {
       {/* Add Expense Dialog */}
       <Dialog open={showAdd} onOpenChange={setShowAdd}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Record Expense</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editId ? "Edit" : "Record"} Expense</DialogTitle></DialogHeader>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Date *</Label>
@@ -258,7 +276,7 @@ export default function ExpensesPage() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAdd(false)}>Cancel</Button>
             <Button onClick={handleAdd} disabled={adding}>
-              {adding ? "Recording..." : "Record Expense"}
+              {adding ? "Saving..." : editId ? "Update Expense" : "Record Expense"}
             </Button>
           </DialogFooter>
         </DialogContent>

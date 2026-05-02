@@ -95,6 +95,7 @@ export function QuickAddProduct({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    e.stopPropagation();
     setLoading(true);
     setError("");
 
@@ -217,6 +218,11 @@ export function QuickAddProduct({
                 onChange={(e) => setSellingPrice(e.target.value)}
                 required
               />
+              {Number(mrp) > 0 && Number(sellingPrice) > 0 && Number(sellingPrice) < Number(mrp) && (
+                <p className="text-xs text-green-600 font-medium">
+                  {((1 - Number(sellingPrice) / Number(mrp)) * 100).toFixed(1)}% below MRP
+                </p>
+              )}
             </div>
           </div>
 

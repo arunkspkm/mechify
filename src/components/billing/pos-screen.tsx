@@ -66,6 +66,7 @@ interface CartItem {
   sku: string;
   qty: string;
   unitPrice: string;
+  mrp: number;
   discountAmount: string;
   installationCharge: string;
   maxDiscountPercent: number;
@@ -132,6 +133,7 @@ export function POSScreen() {
   const [productSearch, setProductSearch] = useState("");
   const [searchResults, setSearchResults] = useState<SearchProduct[]>([]);
   const [searchHighlight, setSearchHighlight] = useState(-1);
+  const [showOutOfStock, setShowOutOfStock] = useState(false);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [customItemOpen, setCustomItemOpen] = useState(false);
   const [customItemName, setCustomItemName] = useState("");
@@ -208,7 +210,8 @@ export function POSScreen() {
       if (saved) {
         const data = JSON.parse(saved);
         if (data.cartItems?.length > 0) {
-          setCartItems(data.cartItems);
+          const restoredItems = (data.cartItems as CartItem[]).map((it) => ({ ...it, key: ++cartKeyCounter }));
+          setCartItems(restoredItems);
           setSelectedCustomer(data.customer ?? null);
           setNewCustomerName(data.customerName ?? "");
           setNewCustomerPhone(data.customerPhone ?? "");
@@ -268,8 +271,8 @@ export function POSScreen() {
     if (cartItems.length > 0) {
       holdCurrentBill();
     }
-    // Restore
-    setCartItems(bill.cartItems);
+    // Restore (reassign fresh keys to avoid collision with cartKeyCounter)
+    setCartItems(bill.cartItems.map((it) => ({ ...it, key: ++cartKeyCounter })));
     setSelectedCustomer(bill.customer);
     setNewCustomerName(bill.customerName);
     setNewCustomerPhone(bill.customerPhone);
@@ -304,6 +307,7 @@ export function POSScreen() {
     setLoyaltyPointsToRedeem(0);
     setNotes("");
     setCompanionAlert([]);
+    setOverrideKeys(new Set());
     localStorage.removeItem("mechify_active_cart");
     searchRef.current?.focus();
   }
@@ -311,6 +315,37 @@ export function POSScreen() {
   // Config
   const [gstEnabled, setGstEnabled] = useState(false);
   const [globalMaxDiscountPercent, setGlobalMaxDiscountPercent] = useState(100);
+
+  // Owner override PIN
+  const [overrideKeys, setOverrideKeys] = useState<Set<number>>(new Set());
+  const [pinDialogOpen, setPinDialogOpen] = useState(false);
+  const [pinInput, setPinInput] = useState("");
+  const [pinItemKey, setPinItemKey] = useState<number | null>(null);
+  const [pinError, setPinError] = useState("");
+
+  function requestOverride(itemKey: number) {
+    setPinItemKey(itemKey);
+    setPinInput("");
+    setPinError("");
+    setPinDialogOpen(true);
+  }
+
+  async function verifyPin() {
+    const res = await fetch("/api/settings/verify-pin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pin: pinInput }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      setPinError(err.error || "Invalid PIN");
+      return;
+    }
+    if (pinItemKey !== null) {
+      setOverrideKeys((prev) => new Set(prev).add(pinItemKey));
+    }
+    setPinDialogOpen(false);
+  }
 
   const [submitting, setSubmitting] = useState(false);
   const [confirmSaleOpen, setConfirmSaleOpen] = useState(false);
@@ -422,7 +457,9 @@ export function POSScreen() {
     const controller = new AbortController();
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/products/search?q=${encodeURIComponent(productSearch)}&limit=10`, { signal: controller.signal });
+        const params = new URLSearchParams({ q: productSearch, limit: "25" });
+        if (!showOutOfStock) params.set("inStockOnly", "true");
+        const res = await fetch(`/api/products/search?${params}`, { signal: controller.signal });
         if (res.ok) {
           const json = await res.json();
           setSearchResults(json.data ?? []);
@@ -430,7 +467,7 @@ export function POSScreen() {
       } catch { /* aborted or network error */ }
     }, 250);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [productSearch]);
+  }, [productSearch, showOutOfStock]);
 
   // Load vehicle models when make changes
   useEffect(() => {
@@ -443,6 +480,9 @@ export function POSScreen() {
   // ==================== Cart Logic ====================
 
   function addToCart(product: SearchProduct) {
+    if (product.stock <= 0) {
+      toast.warning(`${product.name} is out of stock — verify inventory before billing.`);
+    }
     const existing = cartItems.find((i) => i.productId === product.id);
     if (existing) {
       setCartItems((prev) =>
@@ -450,6 +490,9 @@ export function POSScreen() {
       );
     } else {
       const taxRate = (product.taxRate?.metadata as Record<string, number> | null)?.rate ?? 0;
+      const bundleSize = Number(product.bundleSize) || 1;
+      const perUnitPrice = Number(product.sellingPrice) / bundleSize;
+      const perUnitMrp = Number(product.mrp) / bundleSize;
       setCartItems((prev) => [
         ...prev,
         {
@@ -459,7 +502,8 @@ export function POSScreen() {
           productName: product.name,
           sku: product.sku,
           qty: "1",
-          unitPrice: String(Number(product.sellingPrice)),
+          unitPrice: String(perUnitPrice),
+          mrp: perUnitMrp,
           discountAmount: "0",
           installationCharge: String(Number(product.installationCharge)),
           maxDiscountPercent: Number(product.maxDiscountPercent ?? 100),
@@ -509,6 +553,7 @@ export function POSScreen() {
         sku: "CUSTOM",
         qty: customItemQty || "1",
         unitPrice: customItemPrice,
+        mrp: 0,
         discountAmount: "0",
         installationCharge: "0",
         maxDiscountPercent: 100,
@@ -729,6 +774,7 @@ export function POSScreen() {
           discountAmount: Number(i.discountAmount) || 0,
           installationCharge: Number(i.installationCharge) || 0,
           taxRatePercent: i.taxRatePercent,
+          ownerOverride: overrideKeys.has(i.key),
         })),
         payments: paymentLines
           .filter((p) => Number(p.amount) > 0)
@@ -870,6 +916,14 @@ export function POSScreen() {
               className="pl-10"
             />
           </div>
+          <label className="flex items-center gap-1.5 text-xs text-gray-500 mt-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showOutOfStock}
+              onChange={(e) => setShowOutOfStock(e.target.checked)}
+            />
+            Show out of stock
+          </label>
         </div>
 
         <div className="flex-1 overflow-auto">
@@ -889,12 +943,26 @@ export function POSScreen() {
                       <p className="text-xs text-gray-500">{p.sku} • {p.category.name}</p>
                     </div>
                     <div className="text-right">
-                      <p className="text-sm font-medium">Rs.{Number(p.sellingPrice).toFixed(0)}</p>
-                      <p className="text-xs text-gray-500">Stock: {p.stock}</p>
+                      <p className="text-sm font-medium">Rs.{(Number(p.sellingPrice) / (Number(p.bundleSize) || 1)).toFixed(2)}</p>
+                      {Number(p.mrp) / (Number(p.bundleSize) || 1) > Number(p.sellingPrice) / (Number(p.bundleSize) || 1) && (
+                        <p className="text-[10px] text-gray-400 line-through">MRP Rs.{(Number(p.mrp) / (Number(p.bundleSize) || 1)).toFixed(0)}</p>
+                      )}
+                      {p.stock <= 0 ? (
+                        <p className="text-xs text-red-500 font-medium">Out of stock</p>
+                      ) : (
+                        <p className="text-xs text-gray-500">
+                          Stock: {p.stock}{Number(p.bundleSize) > 1 ? ` • Bundle of ${Number(p.bundleSize)}` : ""}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </button>
               ))}
+              {searchResults.length === 25 && (
+                <div className="px-3 py-2 text-xs text-muted-foreground border-t">
+                  Showing first 25 — keep typing to refine.
+                </div>
+              )}
             </div>
           ) : productSearch.length >= 2 ? (
             <div className="p-4 text-center text-sm text-gray-500">
@@ -929,7 +997,7 @@ export function POSScreen() {
       </div>
 
       {/* CENTER: Cart */}
-      <div className="flex-1 flex flex-col border rounded-lg bg-white">
+      <div className="flex-1 flex flex-col border rounded-lg bg-white min-w-0">
         <div className="p-3 border-b flex justify-between items-center">
           <h2 className="font-semibold">Cart ({cartItems.length} items)</h2>
           {cartItems.length > 0 && (
@@ -967,106 +1035,115 @@ export function POSScreen() {
           </div>
         )}
 
-        <div className="flex-1 overflow-auto p-3">
+        <div className="flex-1 overflow-auto">
           {cartItems.length === 0 ? (
             <div className="text-center text-gray-400 mt-20">
               <p>Cart is empty</p>
               <p className="text-sm">Search for products to add</p>
             </div>
           ) : (
-            <div className="space-y-2">
-              {cartItems.map((item) => (
-                <div key={item.key} className="border rounded p-3 space-y-2">
-                  <div className="flex justify-between">
-                    <div>
-                      <p className="font-medium text-sm">{item.productName}</p>
-                      <p className="text-xs text-gray-500">
-                        {item.isCustomItem ? (
-                          <Badge variant="secondary" className="text-xs">Custom Item</Badge>
-                        ) : (
-                          item.sku
+            <div>
+              {cartItems.map((item) => {
+                const unitPrice = n(item.unitPrice);
+                const disc = n(item.discountAmount);
+                const effectivePrice = unitPrice - disc;
+                const hasOverride = overrideKeys.has(item.key);
+                const lineTotal = (unitPrice - disc) * n(item.qty) + n(item.installationCharge);
+
+                // Discount validation
+                const maxDiscPercent = item.maxDiscountPercent < 100 ? item.maxDiscountPercent : globalMaxDiscountPercent;
+                const maxDiscByPercent = Math.floor(unitPrice * maxDiscPercent / 100);
+                const exceedsPercent = !isOwner && disc > maxDiscByPercent && maxDiscPercent < 100;
+                const belowCost = !item.isCustomItem && item.landedCostPerUnit > 0 && effectivePrice <= item.landedCostPerUnit;
+                const lowMargin = !isOwner && !item.isCustomItem && item.landedCostPerUnit > 0 && effectivePrice < item.landedCostPerUnit * 1.1 && !belowCost;
+                const priceInvalid = disc > 0 && (exceedsPercent || belowCost);
+
+                let warning: { text: string; color: string; showOverride: boolean } | null = null;
+                if (disc > 0) {
+                  if (exceedsPercent && !hasOverride) {
+                    warning = { text: `Max ${maxDiscPercent}% = Rs.${maxDiscByPercent}`, color: "text-red-600", showOverride: true };
+                  } else if (belowCost && !hasOverride) {
+                    const maxDiscByCost = getMaxDiscountForOperator(unitPrice, item.landedCostPerUnit);
+                    warning = { text: `Below cost! Max: Rs.${Math.min(maxDiscByCost, maxDiscByPercent < 100 ? maxDiscByPercent : maxDiscByCost)}`, color: "text-red-600", showOverride: true };
+                  } else if ((exceedsPercent || belowCost) && hasOverride) {
+                    warning = { text: "Override approved", color: "text-green-600", showOverride: false };
+                  } else if (lowMargin) {
+                    const maxDiscByCost = getMaxDiscountForOperator(unitPrice, item.landedCostPerUnit);
+                    warning = { text: `Low margin. Max: Rs.${Math.min(maxDiscByCost, maxDiscByPercent < 100 ? maxDiscByPercent : maxDiscByCost)}`, color: "text-amber-600", showOverride: false };
+                  }
+                }
+
+                return (
+                  <div key={item.key} className="border-b hover:bg-gray-50 px-3 py-2">
+                    {/* Row 1: product name + delete */}
+                    <div className="flex items-start gap-2 mb-1">
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium text-sm truncate" title={item.productName}>{item.productName}</p>
+                        <p className="text-[11px] text-gray-500 truncate">
+                          {item.isCustomItem ? "Custom" : item.sku}
+                          {!item.isCustomItem && item.mrp > Number(item.unitPrice) && (
+                            <span className="ml-2 line-through">MRP Rs.{item.mrp.toFixed(0)}</span>
+                          )}
+                        </p>
+                      </div>
+                      <div className="text-right text-sm font-semibold shrink-0">Rs.{lineTotal.toFixed(0)}</div>
+                      <Button variant="ghost" size="sm" className="h-6 w-6 p-0 shrink-0" onClick={() => removeCartItem(item.key)}>
+                        <Trash2 className="h-3.5 w-3.5 text-red-400" />
+                      </Button>
+                    </div>
+                    {/* Row 2: inputs */}
+                    <div className="flex items-center gap-1.5">
+                      <div className="flex flex-col">
+                        <span className="text-[10px] text-gray-400 uppercase">Qty</span>
+                        <Input
+                          type="number" min="1" max={item.stock}
+                          value={item.qty}
+                          onChange={(e) => updateCartItem(item.key, "qty", e.target.value)}
+                          className="h-7 w-14 text-sm text-center"
+                        />
+                      </div>
+                      <div className="flex flex-col flex-1 min-w-0">
+                        <span className="text-[10px] text-gray-400 uppercase">Price</span>
+                        <Input
+                          type="number"
+                          value={item.unitPrice}
+                          onChange={(e) => updateCartItem(item.key, "unitPrice", e.target.value)}
+                          disabled={!isOwner && !item.isCustomItem}
+                          className={`h-7 text-sm text-right ${!isOwner && !item.isCustomItem ? "bg-gray-50" : ""}`}
+                        />
+                      </div>
+                      <div className="flex flex-col flex-1 min-w-0">
+                        <span className="text-[10px] text-gray-400 uppercase">Discount</span>
+                        <Input
+                          type="number" min="0"
+                          value={item.discountAmount}
+                          onChange={(e) => updateCartItem(item.key, "discountAmount", e.target.value)}
+                          className={`h-7 text-sm text-right ${priceInvalid && !hasOverride ? "border-red-400" : ""}`}
+                        />
+                      </div>
+                      <div className="flex flex-col flex-1 min-w-0">
+                        <span className="text-[10px] text-gray-400 uppercase">Install</span>
+                        <Input
+                          type="number" min="0"
+                          value={item.installationCharge}
+                          onChange={(e) => updateCartItem(item.key, "installationCharge", e.target.value)}
+                          className="h-7 text-sm text-right"
+                        />
+                      </div>
+                    </div>
+                    {warning && (
+                      <div className={`flex items-center gap-2 pt-1 text-[10px] ${warning.color}`}>
+                        <span>{warning.text}</span>
+                        {warning.showOverride && (
+                          <button type="button" className="text-blue-600 hover:underline" onClick={() => requestOverride(item.key)}>
+                            Owner Override
+                          </button>
                         )}
-                      </p>
-                    </div>
-                    <Button variant="ghost" size="sm" onClick={() => removeCartItem(item.key)}>
-                      <Trash2 className="h-4 w-4 text-red-400" />
-                    </Button>
+                      </div>
+                    )}
                   </div>
-                  <div className="grid grid-cols-4 gap-2">
-                    <div>
-                      <Label className="text-xs">Qty</Label>
-                      <Input
-                        type="number"
-                        min="1"
-                        max={item.stock}
-                        value={item.qty}
-                        onChange={(e) => updateCartItem(item.key, "qty", e.target.value)}
-                        className="h-8 text-sm"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-xs">Price</Label>
-                      <Input
-                        type="number"
-                        value={item.unitPrice}
-                        onChange={(e) => updateCartItem(item.key, "unitPrice", e.target.value)}
-                        disabled={!isOwner && !item.isCustomItem}
-                        className={`h-8 text-sm ${!isOwner && !item.isCustomItem ? "bg-gray-50" : ""}`}
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-xs">Discount</Label>
-                      <Input
-                        type="number"
-                        min="0"
-                        value={item.discountAmount}
-                        onChange={(e) => updateCartItem(item.key, "discountAmount", e.target.value)}
-                        className={`h-8 text-sm ${n(item.discountAmount) > 0 && (
-                          (!isOwner && (item.maxDiscountPercent < 100 ? item.maxDiscountPercent : globalMaxDiscountPercent) < 100 && n(item.discountAmount) > n(item.unitPrice) * (item.maxDiscountPercent < 100 ? item.maxDiscountPercent : globalMaxDiscountPercent) / 100)
-                          || (!item.isCustomItem && item.landedCostPerUnit > 0 && n(item.unitPrice) - n(item.discountAmount) <= item.landedCostPerUnit * 1.1)
-                        ) ? "border-red-400" : ""}`}
-                      />
-                      {n(item.discountAmount) > 0 && (() => {
-                        const unitPrice = n(item.unitPrice);
-                        const disc = n(item.discountAmount);
-                        const effectivePrice = unitPrice - disc;
-
-                        // Check 1: Global max discount % (from Settings)
-                        const maxDiscPercent = item.maxDiscountPercent < 100 ? item.maxDiscountPercent : globalMaxDiscountPercent;
-                        const maxDiscByPercent = Math.floor(unitPrice * maxDiscPercent / 100);
-                        if (!isOwner && disc > maxDiscByPercent && maxDiscPercent < 100) {
-                          return <p className="text-[10px] text-red-600 mt-0.5">Max {maxDiscPercent}% = Rs.{maxDiscByPercent}</p>;
-                        }
-
-                        // Check 2: Margin guard (landed cost based)
-                        if (!item.isCustomItem && item.landedCostPerUnit > 0) {
-                          const maxDiscByCost = getMaxDiscountForOperator(unitPrice, item.landedCostPerUnit);
-                          if (effectivePrice <= item.landedCostPerUnit) {
-                            return <p className="text-[10px] text-red-600 mt-0.5">Below cost! Max: Rs.{Math.min(maxDiscByCost, maxDiscByPercent < 100 ? maxDiscByPercent : maxDiscByCost)}</p>;
-                          }
-                          if (!isOwner && effectivePrice < item.landedCostPerUnit * 1.1) {
-                            return <p className="text-[10px] text-amber-600 mt-0.5">Low margin. Max: Rs.{Math.min(maxDiscByCost, maxDiscByPercent < 100 ? maxDiscByPercent : maxDiscByCost)}</p>;
-                          }
-                        }
-                        return null;
-                      })()}
-                    </div>
-                    <div>
-                      <Label className="text-xs">Install</Label>
-                      <Input
-                        type="number"
-                        min="0"
-                        value={item.installationCharge}
-                        onChange={(e) => updateCartItem(item.key, "installationCharge", e.target.value)}
-                        className="h-8 text-sm"
-                      />
-                    </div>
-                  </div>
-                  <div className="text-right text-sm font-medium">
-                    Rs.{((n(item.unitPrice) - n(item.discountAmount)) * n(item.qty) + n(item.installationCharge)).toFixed(2)}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -1419,6 +1496,31 @@ export function POSScreen() {
             .then((j) => { if (j.data?.[0]) addToCart(j.data[0]); });
         }}
       />
+
+      {/* Owner Override PIN Dialog */}
+      <Dialog open={pinDialogOpen} onOpenChange={(open) => { setPinDialogOpen(open); if (!open) { setPinInput(""); setPinError(""); } }}>
+        <DialogContent className="max-w-xs">
+          <DialogHeader><DialogTitle>Owner Override</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-gray-600">Enter the owner override PIN to approve this discount.</p>
+            <Input
+              type="password"
+              inputMode="numeric"
+              maxLength={6}
+              placeholder="Enter PIN"
+              value={pinInput}
+              onChange={(e) => { setPinInput(e.target.value.replace(/\D/g, "")); setPinError(""); }}
+              onKeyDown={(e) => { if (e.key === "Enter" && pinInput.length >= 4) verifyPin(); }}
+              autoFocus
+            />
+            {pinError && <p className="text-xs text-red-600">{pinError}</p>}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPinDialogOpen(false)}>Cancel</Button>
+            <Button onClick={verifyPin} disabled={pinInput.length < 4}>Verify</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* New Customer Dialog */}
       <Dialog open={newCustomerOpen} onOpenChange={setNewCustomerOpen}>

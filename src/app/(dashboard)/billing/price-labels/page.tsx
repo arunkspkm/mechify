@@ -18,8 +18,15 @@ interface ProductResult {
   barcode: string | null;
   mrp: string;
   sellingPrice: string;
+  installationCharge?: string | number;
+  bundleSize: string | number;
+  stock?: number;
   brand?: { name: string } | null;
   category?: { name: string } | null;
+}
+
+function perUnit(price: string | number, bundleSize: string | number) {
+  return Number(price) / (Number(bundleSize) || 1);
 }
 
 interface LabelItem {
@@ -44,6 +51,8 @@ export default function PriceLabelsPage() {
   const [labelSize, setLabelSize] = useState<LabelSize>("a4-65");
   const [showPreview, setShowPreview] = useState(false);
   const [shopName, setShopName] = useState("Mechify");
+  const [showGrid, setShowGrid] = useState(true);
+  const [showOutOfStock, setShowOutOfStock] = useState(false);
 
   // Load shop name + pre-filled items from purchase invoice / stock inward
   useEffect(() => {
@@ -90,14 +99,16 @@ export default function PriceLabelsPage() {
   useEffect(() => {
     if (search.length < 2) { setSearchResults([]); return; }
     const t = setTimeout(async () => {
-      const res = await fetch(`/api/products/search?q=${encodeURIComponent(search)}&limit=8`);
+      const params = new URLSearchParams({ q: search, limit: "25" });
+      if (!showOutOfStock) params.set("inStockOnly", "true");
+      const res = await fetch(`/api/products/search?${params}`);
       if (res.ok) {
         const json = await res.json();
         setSearchResults(json.data ?? []);
       }
     }, 250);
     return () => clearTimeout(t);
-  }, [search]);
+  }, [search, showOutOfStock]);
 
   function addProduct(product: ProductResult) {
     const existing = labelItems.find((i) => i.product.id === product.id);
@@ -166,6 +177,18 @@ export default function PriceLabelsPage() {
           ))}
         </div>
 
+        {/* Print options */}
+        <div className="flex gap-4 mt-3 text-sm flex-wrap">
+          <label className="flex items-center gap-1.5 cursor-pointer select-none">
+            <input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} />
+            Show grid lines (cut guides)
+          </label>
+          <label className="flex items-center gap-1.5 cursor-pointer select-none text-gray-500">
+            <input type="checkbox" checked={showOutOfStock} onChange={(e) => setShowOutOfStock(e.target.checked)} />
+            Show out of stock
+          </label>
+        </div>
+
         {/* Product search */}
         <div className="relative mt-4 max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -186,13 +209,25 @@ export default function PriceLabelsPage() {
                     <p className="text-xs text-gray-400">{p.sku}</p>
                   </div>
                   <div className="text-right">
-                    <p className="text-sm font-medium">Rs.{Number(p.sellingPrice).toFixed(0)}</p>
-                    {Number(p.mrp) !== Number(p.sellingPrice) && (
-                      <p className="text-xs text-gray-400 line-through">MRP: Rs.{Number(p.mrp).toFixed(0)}</p>
+                    <p className="text-sm font-medium">Rs.{perUnit(p.sellingPrice, p.bundleSize).toFixed(0)}</p>
+                    {perUnit(p.mrp, p.bundleSize) !== perUnit(p.sellingPrice, p.bundleSize) && (
+                      <p className="text-xs text-gray-400 line-through">MRP: Rs.{perUnit(p.mrp, p.bundleSize).toFixed(0)}</p>
+                    )}
+                    {p.stock !== undefined && (
+                      p.stock <= 0 ? (
+                        <p className="text-xs text-red-500 font-medium">Out of stock</p>
+                      ) : (
+                        <p className="text-xs text-gray-500">Stock: {p.stock}</p>
+                      )
                     )}
                   </div>
                 </button>
               ))}
+              {searchResults.length === 25 && (
+                <div className="px-4 py-2 text-xs text-muted-foreground">
+                  Showing first 25 — keep typing to refine.
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -206,6 +241,7 @@ export default function PriceLabelsPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Product</TableHead>
+                    <TableHead className="text-right">Stock</TableHead>
                     <TableHead className="text-right">MRP</TableHead>
                     <TableHead className="text-right">Price</TableHead>
                     <TableHead className="text-center">Label Qty</TableHead>
@@ -219,8 +255,17 @@ export default function PriceLabelsPage() {
                         <p className="font-medium text-sm">{item.product.name}</p>
                         <p className="text-xs text-gray-400">{item.product.sku}</p>
                       </TableCell>
-                      <TableCell className="text-right">Rs.{Number(item.product.mrp).toFixed(0)}</TableCell>
-                      <TableCell className="text-right font-medium">Rs.{Number(item.product.sellingPrice).toFixed(0)}</TableCell>
+                      <TableCell className="text-right">
+                        {item.product.stock === undefined ? (
+                          <span className="text-gray-400 italic text-xs">—</span>
+                        ) : item.product.stock <= 0 ? (
+                          <span className="text-red-500 font-medium">0</span>
+                        ) : (
+                          item.product.stock
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">Rs.{perUnit(item.product.mrp, item.product.bundleSize).toFixed(0)}</TableCell>
+                      <TableCell className="text-right font-medium">Rs.{perUnit(item.product.sellingPrice, item.product.bundleSize).toFixed(0)}</TableCell>
                       <TableCell>
                         <div className="flex items-center justify-center gap-1">
                           <Button variant="outline" size="icon" className="h-7 w-7"
@@ -252,7 +297,7 @@ export default function PriceLabelsPage() {
       </div>
 
       {/* Print Preview — visible only when printing */}
-      <div id="label-print" className={showPreview ? "" : "hidden print:block"}>
+      <div id="label-print" className={`${showPreview ? "" : "hidden print:block"}${showGrid ? "" : " no-label-grid"}`}>
         {labelSize.startsWith("a4") ? (
           <A4Labels items={labelItems} shopName={shopName} size={labelSize} />
         ) : (
@@ -295,13 +340,16 @@ function A4Labels({ items, shopName, size }: { items: LabelItem[]; shopName: str
             <div key={idx} className={`a4-label ${config.cssClass}`}>
               {!isSmall && <div className="a4-label-shop">{shopName}</div>}
               <div className="a4-label-name">{p.name}</div>
-              {!isSmall && <div className="a4-label-sku">{p.sku}</div>}
+              <div className="a4-label-sku">{p.sku}</div>
               <div className="a4-label-prices">
-                {Number(p.mrp) > 0 && Number(p.mrp) !== Number(p.sellingPrice) && (
-                  <span className="a4-label-mrp">MRP: ₹{Number(p.mrp).toFixed(0)}</span>
+                {perUnit(p.mrp, p.bundleSize) > 0 && perUnit(p.mrp, p.bundleSize) !== perUnit(p.sellingPrice, p.bundleSize) && (
+                  <span className="a4-label-mrp">MRP: ₹{perUnit(p.mrp, p.bundleSize).toFixed(0)}</span>
                 )}
                 <span className="a4-label-ourprice">Our Price:</span>
-                <span className="a4-label-price">₹{Number(p.sellingPrice).toFixed(0)}</span>
+                <span className="a4-label-price">
+                  ₹{perUnit(p.sellingPrice, p.bundleSize).toFixed(0)}
+                  {Number(p.installationCharge) > 0 && <span className="a4-label-asterisk">*</span>}
+                </span>
               </div>
             </div>
           ))}
@@ -328,12 +376,15 @@ function ThermalLabels({ items, shopName, size }: { items: LabelItem[]; shopName
         <div key={idx} className={`thermal-label ${isSmall ? "thermal-label-small" : ""}`}>
           <div className="thermal-label-shop">{shopName}</div>
           <div className="thermal-label-name">{p.name}</div>
-          {!isSmall && <div className="thermal-label-sku">{p.sku}</div>}
+          <div className="thermal-label-sku">{p.sku}</div>
           <div className="thermal-label-prices">
-            {Number(p.mrp) !== Number(p.sellingPrice) && (
-              <span className="thermal-label-mrp">MRP: ₹{Number(p.mrp).toFixed(0)}</span>
+            {perUnit(p.mrp, p.bundleSize) !== perUnit(p.sellingPrice, p.bundleSize) && (
+              <span className="thermal-label-mrp">MRP: ₹{perUnit(p.mrp, p.bundleSize).toFixed(0)}</span>
             )}
-            <span className="thermal-label-price">₹{Number(p.sellingPrice).toFixed(0)}</span>
+            <span className="thermal-label-price">
+              ₹{perUnit(p.sellingPrice, p.bundleSize).toFixed(0)}
+              {Number(p.installationCharge) > 0 && <span className="thermal-label-asterisk">*</span>}
+            </span>
           </div>
         </div>
       ))}

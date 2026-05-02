@@ -30,10 +30,18 @@ function getCurrentFY() {
   return { from: `${fyStart}-04-01`, to: `${fyStart + 1}-03-31`, label: `FY ${fyStart}-${String(fyStart + 1).slice(2)}` };
 }
 
-function getLastFY() {
-  const { from } = getCurrentFY();
-  const fyStart = parseInt(from.slice(0, 4)) - 1;
+function getFY(fyStart: number) {
   return { from: `${fyStart}-04-01`, to: `${fyStart + 1}-03-31`, label: `FY ${fyStart}-${String(fyStart + 1).slice(2)}` };
+}
+
+function getAllFYs(earliestYear: number) {
+  const current = getCurrentFY();
+  const currentStart = parseInt(current.from.slice(0, 4));
+  const fys: ReturnType<typeof getFY>[] = [];
+  for (let y = currentStart; y >= earliestYear; y--) {
+    fys.push(getFY(y));
+  }
+  return fys;
 }
 
 function getThisMonth() {
@@ -82,6 +90,18 @@ export default function ReportsPage() {
   const [to, setTo] = useState(() => getCurrentFY().to);
   const [activePeriod, setActivePeriod] = useState("fy");
   const [tab, setTab] = useState("sales");
+  const [availableFys, setAvailableFys] = useState<ReturnType<typeof getFY>[]>(() => [getCurrentFY()]);
+
+  useEffect(() => {
+    fetch("/api/reports/fy-range")
+      .then((r) => r.ok ? r.json() : null)
+      .then((json) => {
+        if (json?.data?.earliestFyYear) {
+          setAvailableFys(getAllFYs(json.data.earliestFyYear));
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   function setPeriod(key: string, period: { from: string; to: string }) {
     setFrom(period.from);
@@ -106,10 +126,14 @@ export default function ReportsPage() {
       </div>
 
       {/* Quick period buttons */}
-      <div className="flex gap-2 flex-wrap">
+      <div className="flex gap-2 flex-wrap items-center">
+        {availableFys.map((fy, idx) => (
+          <Button key={fy.from} variant={activePeriod === `fy-${idx}` ? "default" : "outline"} size="sm"
+            onClick={() => setPeriod(`fy-${idx}`, fy)}>
+            {fy.label}
+          </Button>
+        ))}
         {[
-          { key: "fy", ...getCurrentFY() },
-          { key: "lastfy", ...getLastFY() },
           { key: "quarter", ...getThisQuarter() },
           { key: "month", ...getThisMonth() },
           { key: "week", ...getThisWeek() },
@@ -134,10 +158,10 @@ export default function ReportsPage() {
         </TabsList>
 
         <TabsContent value="sales"><SalesReport from={from} to={to} /></TabsContent>
-        <TabsContent value="inventory"><InventoryReport /></TabsContent>
+        <TabsContent value="inventory"><InventoryReport from={from} to={to} /></TabsContent>
         <TabsContent value="financial"><FinancialReport from={from} to={to} /></TabsContent>
-        <TabsContent value="supplier"><LedgerReport type="supplier" /></TabsContent>
-        <TabsContent value="customer"><LedgerReport type="customer" /></TabsContent>
+        <TabsContent value="supplier"><LedgerReport type="supplier" from={from} to={to} /></TabsContent>
+        <TabsContent value="customer"><LedgerReport type="customer" from={from} to={to} /></TabsContent>
         <TabsContent value="payroll"><PayrollReport from={from} to={to} /></TabsContent>
         <TabsContent value="returns"><ReturnsReport from={from} to={to} /></TabsContent>
         <TabsContent value="gst"><GSTReport from={from} to={to} /></TabsContent>
@@ -314,18 +338,18 @@ function SalesReport({ from, to }: { from: string; to: string }) {
 }
 
 // ============ INVENTORY REPORT ============
-function InventoryReport() {
+function InventoryReport({ from, to }: { from: string; to: string }) {
   const [data, setData] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
   const [type, setType] = useState("stock");
 
   useEffect(() => {
     setLoading(true);
-    fetch(`/api/reports/inventory?type=${type}`)
+    fetch(`/api/reports/inventory?type=${type}&from=${from}&to=${to}`)
       .then((r) => r.ok ? r.json() : null)
       .then((json) => { setData(json?.data ?? null); setLoading(false); })
       .catch(() => setLoading(false));
-  }, [type]);
+  }, [type, from, to]);
 
   if (loading) return <p className="text-gray-500 py-4">Loading...</p>;
   if (!data) return <p className="text-red-500">Failed to load</p>;
@@ -342,10 +366,15 @@ function InventoryReport() {
           </Button>
         ))}
         <Button variant="outline" size="sm" className="ml-auto"
-          onClick={() => window.open(`/api/reports/inventory?type=${type}&format=excel`)}>
+          onClick={() => window.open(`/api/reports/inventory?type=${type}&from=${from}&to=${to}&format=excel`)}>
           <Download className="mr-1 h-4 w-4" /> Excel
         </Button>
       </div>
+      {(type === "stock" || type === "lowstock") && (
+        <p className="text-xs text-gray-500">
+          Stock and Low Stock are point-in-time — date range doesn&apos;t apply.
+        </p>
+      )}
 
       <div className="grid grid-cols-4 gap-4">
         <Card><CardContent className="py-3 text-center">
@@ -532,17 +561,17 @@ function FinancialReport({ from, to }: { from: string; to: string }) {
 }
 
 // ============ LEDGER REPORT (Supplier / Customer) ============
-function LedgerReport({ type }: { type: "supplier" | "customer" }) {
+function LedgerReport({ type, from, to }: { type: "supplier" | "customer"; from: string; to: string }) {
   const [data, setData] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setLoading(true);
-    fetch(`/api/reports/ledger?type=${type}`)
+    fetch(`/api/reports/ledger?type=${type}&from=${from}&to=${to}`)
       .then((r) => r.ok ? r.json() : null)
       .then((json) => { setData(json?.data ?? null); setLoading(false); })
       .catch(() => setLoading(false));
-  }, [type]);
+  }, [type, from, to]);
 
   if (loading) return <p className="text-gray-500 py-4">Loading...</p>;
   if (!data) return <p className="text-red-500">Failed to load</p>;
@@ -581,7 +610,7 @@ function LedgerReport({ type }: { type: "supplier" | "customer" }) {
           )}
         </div>
         <Button variant="outline" size="sm" className="ml-4"
-          onClick={() => window.open(`/api/reports/ledger?type=${type}&format=excel`)}>
+          onClick={() => window.open(`/api/reports/ledger?type=${type}&from=${from}&to=${to}&format=excel`)}>
           <Download className="mr-1 h-4 w-4" /> Excel
         </Button>
       </div>
