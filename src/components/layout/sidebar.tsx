@@ -31,6 +31,8 @@ import {
   BarChart3,
   Tag,
   Bell,
+  ChevronsLeft,
+  ChevronsRight,
 } from "lucide-react";
 
 const ownerNavItems = [
@@ -91,7 +93,22 @@ export function Sidebar() {
   const [notifications, setNotifications] = useState<NotificationData[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [bellOpen, setBellOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const bellRef = useRef<HTMLDivElement>(null);
+
+  // Restore collapsed state from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem("mechify_sidebar_collapsed");
+    if (saved === "true") setCollapsed(true);
+  }, []);
+
+  function toggleCollapsed() {
+    setCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem("mechify_sidebar_collapsed", String(next));
+      return next;
+    });
+  }
 
   // Poll for notifications every 30 seconds
   useEffect(() => {
@@ -148,14 +165,25 @@ export function Sidebar() {
   const navItems = role === "OWNER" ? ownerNavItems : role === "MANAGER" ? managerNavItems : operatorNavItems;
 
   return (
-    <div className="flex h-full w-64 flex-col border-r bg-white overflow-visible">
-      {/* Logo + Notifications */}
-      <div className="flex h-16 items-center justify-between border-b px-6">
-        <Link href="/" className="text-xl font-bold text-gray-900">
-          Mechify
-        </Link>
+    <div className={cn("flex h-full flex-col border-r bg-white overflow-visible transition-[width] duration-150", collapsed ? "w-16" : "w-64")}>
+      {/* Logo + Notifications + Collapse toggle */}
+      <div className={cn("flex h-16 items-center border-b", collapsed ? "flex-col gap-1 px-1 py-2" : "justify-between px-6")}>
+        {!collapsed && (
+          <Link href="/" className="text-xl font-bold text-gray-900">
+            Mechify
+          </Link>
+        )}
+        {collapsed && (
+          <Link href="/" className="text-lg font-bold text-gray-900" title="Mechify">
+            M
+          </Link>
+        )}
+        <div className="flex items-center gap-1">
+        <button type="button" onClick={toggleCollapsed} className="p-1 text-gray-500 hover:text-gray-900" title={collapsed ? "Expand" : "Collapse"}>
+          {collapsed ? <ChevronsRight className="h-4 w-4" /> : <ChevronsLeft className="h-4 w-4" />}
+        </button>
         <div ref={bellRef} className="relative">
-          <button type="button" onClick={() => setBellOpen(!bellOpen)} className="relative p-1 text-gray-500 hover:text-gray-900">
+          <button type="button" onClick={() => setBellOpen(!bellOpen)} className="relative p-1 text-gray-500 hover:text-gray-900" title="Notifications">
             <Bell className="h-5 w-5" />
             {unreadCount > 0 && (
               <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold rounded-full h-4 w-4 flex items-center justify-center">
@@ -195,10 +223,11 @@ export function Sidebar() {
             </div>
           )}
         </div>
+        </div>
       </div>
 
       {/* Navigation */}
-      <ScrollArea className="flex-1 px-3 py-4">
+      <ScrollArea className={cn("flex-1 py-4", collapsed ? "px-1.5" : "px-3")}>
         <nav className="space-y-1">
           {navItems.map((item) => {
             const isActive = pathname.startsWith(item.href);
@@ -206,15 +235,17 @@ export function Sidebar() {
               <Link
                 key={item.href}
                 href={item.href}
+                title={collapsed ? item.label : undefined}
                 className={cn(
-                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                  "flex items-center rounded-md text-sm font-medium transition-colors",
+                  collapsed ? "justify-center px-2 py-2" : "gap-3 px-3 py-2",
                   isActive
                     ? "bg-gray-100 text-gray-900"
                     : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
                 )}
               >
-                <item.icon className="h-5 w-5" />
-                {item.label}
+                <item.icon className="h-5 w-5 shrink-0" />
+                {!collapsed && item.label}
               </Link>
             );
           })}
@@ -222,22 +253,43 @@ export function Sidebar() {
       </ScrollArea>
 
       {/* User info + logout */}
-      <div className="border-t p-4">
-        <div className="mb-2 text-sm">
-          <p className="font-medium text-gray-900">{session?.user?.name}</p>
-          <p className="text-xs text-gray-500">
-            {role === "OWNER" ? "Owner" : role === "MANAGER" ? "Manager" : "Counter Operator"}
-          </p>
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="w-full justify-start text-gray-600"
-          onClick={() => signOut({ callbackUrl: "/login" })}
-        >
-          <LogOut className="mr-2 h-4 w-4" />
-          Sign Out
-        </Button>
+      <div className={cn("border-t", collapsed ? "p-2" : "p-4")}>
+        {collapsed ? (
+          <div className="flex flex-col items-center gap-1">
+            <div
+              className="h-7 w-7 rounded-full bg-gray-200 flex items-center justify-center text-xs font-semibold text-gray-700"
+              title={`${session?.user?.name ?? ""} — ${role === "OWNER" ? "Owner" : role === "MANAGER" ? "Manager" : "Counter Operator"}`}
+            >
+              {(session?.user?.name ?? "?").slice(0, 1).toUpperCase()}
+            </div>
+            <button
+              type="button"
+              onClick={() => signOut({ callbackUrl: "/login" })}
+              className="p-1 text-gray-500 hover:text-gray-900"
+              title="Sign Out"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="mb-2 text-sm">
+              <p className="font-medium text-gray-900">{session?.user?.name}</p>
+              <p className="text-xs text-gray-500">
+                {role === "OWNER" ? "Owner" : role === "MANAGER" ? "Manager" : "Counter Operator"}
+              </p>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start text-gray-600"
+              onClick={() => signOut({ callbackUrl: "/login" })}
+            >
+              <LogOut className="mr-2 h-4 w-4" />
+              Sign Out
+            </Button>
+          </>
+        )}
       </div>
     </div>
   );

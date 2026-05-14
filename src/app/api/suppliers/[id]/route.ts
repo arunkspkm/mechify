@@ -48,6 +48,7 @@ export async function GET(
             id: true,
             invoiceNumber: true,
             grandTotal: true,
+            amountPaid: true,
             outstandingAmount: true,
             status: true,
             invoiceDate: true,
@@ -95,12 +96,23 @@ export async function GET(
     const totalAdjusted = advances.reduce((s, a) => s + Number(a.adjustedAmount), 0);
     const pendingAdvance = totalAdvance - totalAdjusted;
 
+    // Get all payments for the transaction history ledger (cash + non-cash, advance + applied + regular)
+    const allPayments = await prisma.supplierPayment.findMany({
+      where: { supplierId: id },
+      include: {
+        paymentMethod: { select: { name: true } },
+        purchaseInvoice: { select: { id: true, invoiceNumber: true } },
+      },
+      orderBy: { date: "desc" },
+    });
+
     return NextResponse.json({
       data: {
         ...supplier,
         outstandingBalance: computedOutstanding,
         advances,
         advanceSummary: { totalAdvance, totalAdjusted, pendingAdvance },
+        allPayments,
       },
     });
   } catch (err) {

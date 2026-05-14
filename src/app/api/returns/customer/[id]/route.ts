@@ -125,6 +125,47 @@ export async function PATCH(
         data: { status: newStatus },
       });
 
+      // Reverse loyalty points proportional to the refund (symmetric to earning at sale time).
+      // Walk-in customer / loyalty disabled / zero-refund warranty returns → no-op.
+      if (Number(ret.totalRefund) > 0) {
+        const invoiceWithCustomer = await prisma.invoice.findUnique({
+          where: { id: ret.invoiceId },
+          select: { customerId: true },
+        });
+        if (invoiceWithCustomer?.customerId) {
+          const config = await prisma.businessConfig.findUnique({ where: { id: "default" } });
+          const rate = Number(config?.loyaltyPointsPerRupee ?? 0);
+          if (rate > 0) {
+            const pointsToReverse = Math.floor(Number(ret.totalRefund) * rate);
+            if (pointsToReverse > 0) {
+              const customer = await prisma.customer.findUnique({
+                where: { id: invoiceWithCustomer.customerId },
+                select: { loyaltyPoints: true },
+              });
+              const currentBalance = customer?.loyaltyPoints ?? 0;
+              const actualReverse = Math.min(pointsToReverse, currentBalance);
+              if (actualReverse > 0) {
+                const newBalance = currentBalance - actualReverse;
+                await prisma.customer.update({
+                  where: { id: invoiceWithCustomer.customerId },
+                  data: { loyaltyPoints: newBalance },
+                });
+                await prisma.loyaltyTransaction.create({
+                  data: {
+                    customerId: invoiceWithCustomer.customerId,
+                    type: "ADJUSTMENT",
+                    points: -actualReverse,
+                    balance: newBalance,
+                    invoiceId: ret.invoiceId,
+                    description: `Return ${ret.returnNumber}: reversed ${actualReverse} pts for Rs.${Number(ret.totalRefund).toFixed(0)} refund`,
+                  },
+                });
+              }
+            }
+          }
+        }
+      }
+
       try {
         await createNotification({
           type: "RETURN_APPROVED",

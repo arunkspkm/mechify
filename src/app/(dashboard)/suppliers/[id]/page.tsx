@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { AsyncSelect } from "@/components/shared/async-select";
 import { toast } from "sonner";
-import { ArrowLeft, Save, Star, Plus } from "lucide-react";
+import { ArrowLeft, Save, Star, Plus, Pencil, Trash2 } from "lucide-react";
 
 interface SupplierDetail {
   id: string;
@@ -37,6 +37,7 @@ interface SupplierDetail {
     id: string;
     invoiceNumber: string | null;
     grandTotal: string;
+    amountPaid: string;
     outstandingAmount: string;
     status: string;
     invoiceDate: string;
@@ -64,6 +65,17 @@ interface SupplierDetail {
     totalAdjusted: number;
     pendingAdvance: number;
   };
+  allPayments: {
+    id: string;
+    amount: string;
+    isAdvance: boolean;
+    isAdvanceApplication: boolean;
+    reference: string | null;
+    notes: string | null;
+    date: string;
+    paymentMethod: { name: string };
+    purchaseInvoice: { id: string; invoiceNumber: string | null } | null;
+  }[];
   _count: { batches: number; purchaseInvoices: number; purchaseOrders: number; supplierReturns: number };
 }
 
@@ -158,6 +170,33 @@ export default function SupplierDetailPage({
     setSaving(false);
     if (!res.ok) { const err = await res.json(); toast.error(err.error); return; }
     toast.success("Supplier updated");
+  }
+
+  // ----- Payment edit/delete handlers (group-aware) -----
+  const [editPaymentId, setEditPaymentId] = useState<string | null>(null);
+  const [editPaymentMethodId, setEditPaymentMethodId] = useState<string>("");
+
+  async function handleDeletePayment(paymentId: string, amount: number) {
+    if (!confirm(`Delete this payment (Rs.${amount.toFixed(0)})? Any invoice it paid off will be re-opened. This cannot be undone.`)) return;
+    const res = await fetch(`/api/suppliers/${id}/payments/${paymentId}`, { method: "DELETE" });
+    if (!res.ok) { const err = await res.json(); toast.error(err.error); return; }
+    const json = await res.json();
+    toast.success(`Payment deleted (${json.deletedCount} row${json.deletedCount === 1 ? "" : "s"}, Rs.${json.totalAmount.toFixed(0)})`);
+    fetchSupplier();
+  }
+
+  async function handleSaveEditMethod() {
+    if (!editPaymentId || !editPaymentMethodId) return;
+    const res = await fetch(`/api/suppliers/${id}/payments/${editPaymentId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paymentMethodId: editPaymentMethodId }),
+    });
+    if (!res.ok) { const err = await res.json(); toast.error(err.error); return; }
+    toast.success("Payment method updated");
+    setEditPaymentId(null);
+    setEditPaymentMethodId("");
+    fetchSupplier();
   }
 
   if (loading) return <p className="text-gray-500">Loading...</p>;
@@ -320,6 +359,7 @@ export default function SupplierDetailPage({
                   <TableHead>Invoice</TableHead>
                   <TableHead>Date</TableHead>
                   <TableHead className="text-right">Total</TableHead>
+                  <TableHead className="text-right">Paid</TableHead>
                   <TableHead className="text-right">Outstanding</TableHead>
                   <TableHead>Status</TableHead>
                 </TableRow>
@@ -334,10 +374,11 @@ export default function SupplierDetailPage({
                     </TableCell>
                     <TableCell className="text-sm">{new Date(inv.invoiceDate).toLocaleDateString("en-IN")}</TableCell>
                     <TableCell className="text-right">Rs.{Number(inv.grandTotal).toFixed(0)}</TableCell>
+                    <TableCell className="text-right text-green-600">Rs.{Number(inv.amountPaid).toFixed(0)}</TableCell>
                     <TableCell className="text-right">
                       {Number(inv.outstandingAmount) > 0 ? (
                         <span className="text-red-600">Rs.{Number(inv.outstandingAmount).toFixed(0)}</span>
-                      ) : "Paid"}
+                      ) : "—"}
                     </TableCell>
                     <TableCell><Badge variant="secondary">{inv.status}</Badge></TableCell>
                   </TableRow>
@@ -380,6 +421,216 @@ export default function SupplierDetailPage({
           </CardContent>
         </Card>
       )}
+
+      {/* Transaction History — chronological ledger across invoices, payments, returns */}
+      {(() => {
+        type LedgerRow = {
+          date: string;
+          type: "Invoice" | "Payment" | "Advance" | "Advance applied" | "Return" | "Credit received";
+          reference: string;
+          debit: number;   // increases what we owe supplier
+          credit: number;  // decreases what we owe supplier
+          note?: string;
+          paymentId?: string;            // any one SupplierPayment row in the group — used for edit/delete
+          isReturnCredit?: boolean;      // disable edit/delete on auto-generated return-credit payments
+        };
+        const rows: LedgerRow[] = [];
+
+        // Opening balance (single row at the very start)
+        if (Number(supplier.openingBalance) > 0) {
+          rows.push({
+            date: "0000-01-01",
+            type: "Invoice",
+            reference: "Opening balance",
+            debit: Number(supplier.openingBalance),
+            credit: 0,
+          });
+        }
+
+        // Purchase invoices (debits — increases what we owe)
+        for (const inv of supplier.purchaseInvoices) {
+          rows.push({
+            date: inv.invoiceDate,
+            type: "Invoice",
+            reference: inv.invoiceNumber ?? `PI-${inv.id.slice(-6)}`,
+            debit: Number(inv.grandTotal),
+            credit: 0,
+          });
+        }
+
+        // Supplier returns — informational row only.
+        // The actual credit impact is captured via the auto-created SupplierPayment row
+        // (reference: "Return credit: <returnNumber>") at credit-received time.
+        for (const ret of supplier.supplierReturns) {
+          rows.push({
+            date: ret.createdAt,
+            type: "Return",
+            reference: ret.returnNumber,
+            debit: 0,
+            credit: 0,
+            note: `${ret.status} — Rs.${Number(ret.totalAmount).toFixed(0)}`,
+          });
+        }
+
+        // Payments (credits — we paid supplier). Bulk payments split into multiple SupplierPayment rows
+        // (one per allocation: invoice, advance, etc.) sharing the same reference. Merge them into a single
+        // ledger entry so the user sees ONE cash event per real transaction.
+        // isAdvanceApplication entries are audit rows for already-paid cash — they don't add cash.
+        const paymentGroups = new Map<string, {
+          date: string;
+          type: "Payment" | "Advance" | "Advance applied";
+          reference: string;
+          amount: number;
+          method: string;
+          isApplication: boolean;
+          paymentId: string;
+          isReturnCredit: boolean;
+        }>();
+        for (const pmt of supplier.allPayments) {
+          const isApplication = pmt.isAdvanceApplication;
+          const isAdvance = pmt.isAdvance;
+          const datePart = new Date(pmt.date).toISOString().slice(0, 10);
+          const refKey = pmt.reference ?? pmt.purchaseInvoice?.id ?? pmt.id;
+          const groupKey = `${datePart}|${refKey}|${pmt.paymentMethod.name}|${isApplication ? "A" : "P"}`;
+          const existing = paymentGroups.get(groupKey);
+          if (existing) {
+            existing.amount += Number(pmt.amount);
+          } else {
+            const ref = pmt.reference
+              ?? pmt.purchaseInvoice?.invoiceNumber
+              ?? (pmt.purchaseInvoice ? `PI-${pmt.purchaseInvoice.id.slice(-6)}` : "—");
+            paymentGroups.set(groupKey, {
+              date: pmt.date,
+              type: isApplication ? "Advance applied" : isAdvance ? "Advance" : "Payment",
+              reference: ref,
+              amount: Number(pmt.amount),
+              method: pmt.paymentMethod.name,
+              isApplication,
+              paymentId: pmt.id,
+              isReturnCredit: !!pmt.reference?.startsWith("Return credit:"),
+            });
+          }
+        }
+        for (const grp of paymentGroups.values()) {
+          rows.push({
+            date: grp.date,
+            type: grp.type,
+            reference: grp.reference,
+            debit: 0,
+            credit: grp.isApplication ? 0 : grp.amount,
+            note: `${grp.method}${grp.isApplication ? " — adjusted from earlier advance" : ""}`,
+            paymentId: grp.paymentId,
+            isReturnCredit: grp.isReturnCredit,
+          });
+        }
+
+        // Sort by date ascending so running balance accumulates correctly
+        rows.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        let balance = 0;
+        const withBalance = rows.map((r) => {
+          balance += r.debit - r.credit;
+          return { ...r, balance };
+        });
+        // Display newest first
+        withBalance.reverse();
+
+        if (withBalance.length === 0) return null;
+        return (
+          <Card>
+            <CardHeader><CardTitle>Transaction History</CardTitle></CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Reference</TableHead>
+                    <TableHead className="text-right">Debit</TableHead>
+                    <TableHead className="text-right">Credit</TableHead>
+                    <TableHead className="text-right">Balance</TableHead>
+                    <TableHead></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {withBalance.map((r, idx) => {
+                    const editable = !!r.paymentId && !r.isReturnCredit && (r.type === "Payment" || r.type === "Advance");
+                    return (
+                    <TableRow key={idx}>
+                      <TableCell className="text-sm whitespace-nowrap">
+                        {r.reference === "Opening balance" ? "—" : new Date(r.date).toLocaleDateString("en-IN")}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={r.type === "Invoice" ? "secondary" : r.type === "Return" ? "outline" : "default"} className="text-[10px]">
+                          {r.type}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {r.reference}
+                        {r.note && <span className="text-xs text-gray-400 ml-2">{r.note}</span>}
+                      </TableCell>
+                      <TableCell className="text-right text-red-600">{r.debit > 0 ? `Rs.${r.debit.toFixed(0)}` : "—"}</TableCell>
+                      <TableCell className="text-right text-green-600">{r.credit > 0 ? `Rs.${r.credit.toFixed(0)}` : "—"}</TableCell>
+                      <TableCell className="text-right font-medium">Rs.{r.balance.toFixed(0)}</TableCell>
+                      <TableCell className="text-right">
+                        {editable && (
+                          <div className="flex gap-1 justify-end">
+                            <button
+                              type="button"
+                              title="Change payment method"
+                              className="text-gray-400 hover:text-blue-600"
+                              onClick={() => { setEditPaymentId(r.paymentId!); setEditPaymentMethodId(""); }}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              title="Delete payment"
+                              className="text-gray-400 hover:text-red-600"
+                              onClick={() => handleDeletePayment(r.paymentId!, r.credit)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );})}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        );
+      })()}
+
+      {/* Edit Payment Method Dialog */}
+      <Dialog open={!!editPaymentId} onOpenChange={(o) => !o && setEditPaymentId(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Change Payment Method</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-gray-500">
+              Updates the method on every row of this payment group (e.g., bulk payment split across invoice + advance).
+              Amount and distribution stay the same.
+            </p>
+            <div className="space-y-1">
+              <Label>New payment method</Label>
+              <select
+                className="w-full h-9 border rounded px-2 text-sm"
+                value={editPaymentMethodId}
+                onChange={(e) => setEditPaymentMethodId(e.target.value)}
+              >
+                <option value="">— Select —</option>
+                {paymentMethods.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setEditPaymentId(null)}>Cancel</Button>
+            <Button onClick={handleSaveEditMethod} disabled={!editPaymentMethodId}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Bulk Payment Dialog */}
       <Dialog open={payOpen} onOpenChange={setPayOpen}>

@@ -997,7 +997,7 @@ export function POSScreen() {
       </div>
 
       {/* CENTER: Cart */}
-      <div className="flex-1 flex flex-col border rounded-lg bg-white min-w-0">
+      <div className="flex-[2] flex flex-col border rounded-lg bg-white min-w-0">
         <div className="p-3 border-b flex justify-between items-center">
           <h2 className="font-semibold">Cart ({cartItems.length} items)</h2>
           {cartItems.length > 0 && (
@@ -1183,7 +1183,7 @@ export function POSScreen() {
       </div>
 
       {/* RIGHT: Customer + Payment */}
-      <div className="w-80 flex flex-col border rounded-lg bg-white">
+      <div className="flex-1 min-w-[320px] flex flex-col border rounded-lg bg-white">
         {/* Customer Section */}
         <div className="p-3 border-b space-y-2">
           <h3 className="font-semibold text-sm flex items-center gap-1">

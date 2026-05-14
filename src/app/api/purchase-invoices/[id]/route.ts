@@ -403,6 +403,73 @@ export async function PATCH(
   return NextResponse.json({ error: "Invalid action" }, { status: 400 });
 }
 
+// DELETE /api/purchase-invoices/[id] — Discard a draft invoice
+// Allowed only when: status=DRAFT, no payments, and every batch is untouched (qtyRemaining === qtyReceived).
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const session = await auth();
+  if (!session || session.user.role !== "OWNER") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const { id } = await params;
+
+  const invoice = await prisma.purchaseInvoice.findUnique({
+    where: { id },
+    include: { items: { include: { batch: true } }, payments: { select: { id: true } } },
+  });
+
+  if (!invoice) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  if (invoice.status !== "DRAFT") {
+    return NextResponse.json(
+      { error: `Cannot discard — invoice is ${invoice.status}. Only DRAFT invoices can be discarded.` },
+      { status: 400 }
+    );
+  }
+
+  if (Number(invoice.amountPaid) > 0 || invoice.payments.length > 0) {
+    return NextResponse.json(
+      { error: "Cannot discard — payments have been recorded against this invoice." },
+      { status: 400 }
+    );
+  }
+
+  const batchIds = invoice.items.map((i) => i.batchId).filter((b): b is string => !!b);
+  const itemIds = invoice.items.map((i) => i.id);
+
+  // For DRAFT invoices, batches are intentionally created with qtyRemaining=0 (stock is released only on finalize).
+  // So the safety check is to ensure no sales reference these batches — covers the case of a re-drafted invoice.
+  if (batchIds.length > 0) {
+    const saleCount = await prisma.invoiceItem.count({ where: { batchId: { in: batchIds } } });
+    if (saleCount > 0) {
+      return NextResponse.json(
+        { error: "Cannot discard — items from this invoice have already been sold." },
+        { status: 400 }
+      );
+    }
+    const returnCount = await prisma.supplierReturnItem.count({ where: { batchId: { in: batchIds } } });
+    if (returnCount > 0) {
+      return NextResponse.json(
+        { error: "Cannot discard — items from this invoice have been returned to the supplier." },
+        { status: 400 }
+      );
+    }
+  }
+
+  await prisma.$transaction([
+    prisma.purchaseInvoiceItem.deleteMany({ where: { id: { in: itemIds } } }),
+    ...(batchIds.length > 0 ? [prisma.batch.deleteMany({ where: { id: { in: batchIds } } })] : []),
+    prisma.purchaseInvoice.delete({ where: { id } }),
+  ]);
+
+  return NextResponse.json({ success: true });
+}
+
 /**
  * Recalculate purchase invoice totals and redistribute handling charge across all items.
  */

@@ -163,6 +163,16 @@ export default function PurchaseInvoiceDetailPage({
     fetchInvoice();
   }
 
+  async function handleDiscard() {
+    if (!confirm("Discard this draft invoice? This permanently deletes all line items and their batches. This cannot be undone.")) return;
+    setActionLoading(true);
+    const res = await fetch(`/api/purchase-invoices/${id}`, { method: "DELETE" });
+    setActionLoading(false);
+    if (!res.ok) { const err = await res.json(); toast.error(err.error); return; }
+    toast.success("Invoice discarded");
+    router.push("/purchase-invoices");
+  }
+
   if (loading) return <p className="text-gray-500">Loading...</p>;
   if (!invoice) return <p className="text-red-600">Purchase invoice not found</p>;
 
@@ -189,6 +199,11 @@ export default function PurchaseInvoiceDetailPage({
           {invoice.status === "DRAFT" && (
             <Button size="sm" onClick={handleFinalize} disabled={actionLoading}>
               <Check className="mr-1 h-4 w-4" /> Finalize
+            </Button>
+          )}
+          {invoice.status === "DRAFT" && (
+            <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50" onClick={handleDiscard} disabled={actionLoading}>
+              <Trash2 className="mr-1 h-4 w-4" /> Discard
             </Button>
           )}
           <Button size="sm" variant="outline" onClick={() => setAddItemOpen(true)}>
